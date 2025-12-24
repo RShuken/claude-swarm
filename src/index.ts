@@ -333,6 +333,7 @@ server.tool(
       feature.status = "in_progress";
       feature.attempts++;
       feature.workerId = result.sessionName;
+      feature.startedAt = new Date().toISOString();
       current.lastUpdated = new Date().toISOString();
       current.progressLog.push(`[${new Date().toISOString()}] Started worker for ${featureId}: ${feature.description}`);
       state.save(current);
@@ -451,6 +452,7 @@ server.tool(
         feature.status = "in_progress";
         feature.attempts++;
         feature.workerId = result.sessionName;
+        feature.startedAt = new Date().toISOString();
       }
 
       return {
