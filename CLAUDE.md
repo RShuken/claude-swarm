@@ -27,17 +27,55 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 
 ### Core Components
 
-**src/index.ts** - MCP server entry point registering 20 tools. All tool handlers are defined inline here. Tool schemas use Zod for validation.
+**src/index.ts** (~4800 lines) - MCP server entry point registering 40+ tools. All tool handlers are defined inline. Tool schemas use Zod for validation. The file is structured by tool category: core orchestration, worker management, competitive planning, confidence monitoring, feature management, session control, protocol management, and protocol networking.
 
-**src/state/manager.ts** - Persistent state management using the "notebook pattern". Stores session state in `.claude/orchestrator/state.json` with atomic writes (temp file + rename). Also generates `claude-progress.txt` for human readability and `init.sh` for environment setup.
+**src/state/manager.ts** - Persistent state management using the "notebook pattern". Stores session state in `.claude/orchestrator/state.json` with atomic writes (temp file + rename). Also generates `claude-progress.txt` for human readability and `init.sh` for environment setup. Manages feature context (`FeatureContext`), routing config, and protocol bindings per feature.
 
-**src/workers/manager.ts** - Manages Claude Code worker sessions via tmux. Key security pattern: prompts are passed via files (not shell strings) to prevent injection. Includes completion monitoring (10s polling), heartbeat tracking, and conflict analysis for parallel execution.
+**src/workers/manager.ts** - Manages Claude Code worker sessions via tmux. Key security pattern: prompts are passed via files (not shell strings) to prevent injection. Includes completion monitoring (10s polling), heartbeat tracking, and conflict analysis for parallel execution. Supports competitive planning mode with dual planners.
+
+**src/workers/confidence.ts** - Multi-signal confidence scoring combining tool activity patterns (35%), self-reported confidence (35%), and output analysis (30%). Detects struggling workers via stuck loops, error patterns, and frustration language.
+
+**src/workers/enforcement-integration.ts** - Hooks protocol enforcement into the worker lifecycle. Validates constraints before worker spawns and monitors during execution.
+
+### Protocol Governance System
+
+The protocol system enables behavioral constraints on workers. Located in `src/protocols/`:
+
+**schema.ts** - Zod schemas defining `Protocol`, `ProtocolConstraint`, constraint types (tool_restriction, file_access, output_format, behavioral, temporal, resource, side_effect), and `BaseConstraints`. All protocol data is validated against these schemas.
+
+**registry.ts** - Protocol storage, activation status, and violation tracking. Persists to `.claude/orchestrator/protocols/`. Implements `ProtocolRegistryLike` interface for resolver compatibility. Maintains audit log of all protocol operations.
+
+**enforcement.ts** - Pre/post execution validation engine. Validates worker actions against active protocol constraints. Supports learning mode for protocol development.
+
+**resolver.ts** - Resolves effective constraints by merging multiple active protocols, handling inheritance (`extends`), and conflict resolution based on priority.
+
+**base-constraints.ts** - Immutable security boundaries (frozen at runtime). Defines prohibited tools (rm -rf, sudo, etc.), prohibited paths (/etc, ~/.ssh, etc.), and maximum privilege ceiling. LLM-generated protocols cannot override these.
+
+**proposal-manager.ts** - Manages LLM-generated protocol proposals. Validates against base constraints, calculates risk scores, and tracks approval workflow (pending → reviewing → approved/rejected).
+
+**proposal-validator.ts** - Deep validation of protocol proposals including constraint rule verification and risk scoring algorithm.
+
+**constraint-evaluator.ts** - Rule evaluation engine that executes constraint checks at runtime. Handles all constraint types with type-specific evaluation logic.
+
+**generator.ts** - Protocol generation utilities for creating well-formed protocols programmatically.
+
+**network/** - Protocol distribution across MCP instances. `distributor.ts` handles bundle export/import with optional signing. `sync.ts` enables push/pull/bidirectional synchronization.
+
+### Additional Components
 
 **src/dashboard/server.ts** - Express 5 HTTP server with REST API and SSE endpoints for real-time monitoring. Dashboard UI served from `src/dashboard/public/`.
 
-**src/utils/security.ts** - Security utilities: path traversal prevention, feature ID validation, session name validation, command allowlist enforcement, and output sanitization. The `ALLOWED_COMMAND_PATTERNS` regex list controls which verification commands can run.
+**src/context/enricher.ts** - Auto-enriches features with relevant documentation (CLAUDE.md, README) and related code files. Configurable context limits prevent prompt bloat (default: 16KB max total, 4KB per doc, 2KB per code file). Includes 60-second cache TTL for frequently accessed context.
 
-**src/utils/format.ts** - Duration formatting and percentage calculation helpers.
+**src/utils/complexity-detector.ts** - Analyzes feature complexity (0-100 score) based on description keywords, scope indicators, dependency count. Features scoring 60+ trigger competitive planning recommendation.
+
+**src/utils/plan-evaluator.ts** - Compares competing implementation plans, scoring on completeness, risk mitigation, and testing coverage.
+
+**src/utils/security.ts** - Path traversal prevention, feature ID validation, session name validation, command allowlist enforcement, and output sanitization. The `ALLOWED_COMMAND_PATTERNS` regex list controls which verification commands can run.
+
+**src/utils/feature-generator.ts** - Auto-generates feature lists from task descriptions using keyword extraction and pattern matching.
+
+**src/utils/format.ts** - Formatting utilities for consistent output across tools (compact vs pretty modes).
 
 ### Key Design Patterns
 
@@ -46,17 +84,33 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 3. **Atomic File Operations** - State and progress files use write-to-temp-then-rename pattern
 4. **Command Allowlist** - Only safe verification commands (npm test, pytest, etc.) can be executed
 5. **File-Based Prompt Passing** - Worker prompts written to `.prompt` files, not shell strings
+6. **Fail-Closed Enforcement** - Unknown constraint types block by default in protocol validation
+7. **Immutable Base Constraints** - Security boundaries frozen at module load, cannot be overridden
 
 ### State Files Created Per Project
 
-- `.claude/orchestrator/state.json` - Main session state (Zod-validated on load)
-- `.claude/orchestrator/feature_list.json` - Feature status for structured access
-- `.claude/orchestrator/workers/*.prompt` - Worker prompts (mode 0600)
-- `.claude/orchestrator/workers/*.log` - Worker output logs
-- `.claude/orchestrator/workers/*.done` - Completion marker files
-- `.claude/orchestrator/workers/*.status` - Worker status JSON
-- `claude-progress.txt` - Human-readable progress log
-- `init.sh` - Environment setup script (mode 0700)
+```
+.claude/orchestrator/
+├── state.json                    # Main session state (Zod-validated on load)
+├── feature_list.json             # Feature status for structured access
+├── protocols/
+│   ├── registry.json             # Protocol definitions
+│   ├── active.json               # Currently active protocols
+│   ├── violations.json           # Recorded violations
+│   ├── audit.json                # Protocol operation audit log
+│   └── proposals/                # Pending LLM-generated proposals
+├── sync/                         # Cross-instance protocol sync
+└── workers/
+    ├── *.prompt                  # Worker prompts (mode 0600)
+    ├── *.log                     # Worker output logs
+    ├── *.done                    # Completion marker files
+    ├── *.status                  # Worker status JSON
+    ├── *.plan.json               # Competitive planning results
+    └── *.confidence              # Self-reported confidence files
+
+claude-progress.txt               # Human-readable progress log
+init.sh                           # Environment setup script (mode 0700)
+```
 
 ## Configuration
 
@@ -67,7 +121,8 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 
 ## Dependencies
 
-Requires tmux for worker session management (`brew install tmux` on macOS).
+- **Node.js 18+** (ES2022 features required)
+- **tmux** for worker session management (`brew install tmux` on macOS)
 
 ## Debugging
 
@@ -84,3 +139,12 @@ tmux capture-pane -t <session-name> -p -S -100
 # Debug MCP protocol with inspector
 npm run inspector
 ```
+
+## Adding New Tools
+
+When adding a new MCP tool to `src/index.ts`:
+1. Define Zod schema for parameters
+2. Add tool registration with `server.tool(name, description, schema, handler)`
+3. Use `ensureInitialized(projectDir)` to get managers
+4. Use security utilities from `src/utils/security.ts` for input validation
+5. Follow existing patterns for error handling and response formatting
