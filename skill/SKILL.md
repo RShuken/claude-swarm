@@ -1,17 +1,18 @@
 ---
 name: swarm
-description: Orchestrate parallel Claude Code worker swarms for multi-hour coding sessions. Use when implementing complex features, large refactors, or multi-step tasks that benefit from parallel worker sessions. Maintains state across context compactions.
+description: Orchestrate parallel Claude Code worker swarms with protocol-based behavioral governance. Use for complex features, large refactors, or multi-step tasks. Supports behavioral constraints, parallel workers, and persistent state across context compactions.
 ---
 
 # Claude Swarm Skill
 
-This skill enables autonomous, multi-hour coding sessions using the claude-swarm MCP server.
+This skill enables autonomous, multi-hour coding sessions using the claude-swarm MCP server with protocol-based behavioral governance.
 
 ## Overview
 
 The orchestrator pattern separates concerns:
 - **Orchestrator (you)**: Plans work, monitors progress, handles decisions
 - **Workers**: Focused Claude Code sessions that implement individual features
+- **Protocols**: Behavioral constraints that govern what workers can/cannot do
 
 ## Quick Start
 
@@ -81,6 +82,72 @@ Call orchestrator_status with the projectDir
 ```
 
 This restores your understanding of the current state from the persistent MCP server.
+
+## Protocol-Based Governance
+
+Protocols define behavioral constraints that govern worker actions. This enables safe autonomous operation with clear boundaries.
+
+### Constraint Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `tool_restriction` | Allow/deny specific tools | Only allow Read, Glob, Grep |
+| `file_access` | Control file system access | Block access to `.env` files |
+| `output_format` | Require specific output patterns | Must include test coverage |
+| `behavioral` | High-level behavior rules | Require confirmation before destructive actions |
+| `temporal` | Time-based constraints | Max 30 minutes per feature |
+| `resource` | Resource usage limits | Max 100 file operations |
+| `side_effect` | Control external effects | No network requests, no git push |
+
+### Using Protocols
+
+```
+1. protocol_register - Register a new protocol (JSON definition)
+2. protocol_activate - Activate for enforcement
+3. start_worker - Workers are validated against active protocols
+4. get_violations - Review any constraint violations
+5. protocol_deactivate - Deactivate when done
+```
+
+### Example Protocol
+
+```json
+{
+  "id": "safe-refactoring-v1",
+  "name": "Safe Refactoring Protocol",
+  "version": "1.0.0",
+  "priority": 100,
+  "constraints": [
+    {
+      "id": "no-secrets",
+      "type": "file_access",
+      "rule": {
+        "type": "file_access",
+        "deniedPaths": ["**/.env", "**/secrets.*"]
+      },
+      "severity": "error",
+      "message": "Cannot access files that may contain secrets"
+    }
+  ],
+  "enforcement": {
+    "mode": "strict",
+    "preExecution": true,
+    "postExecution": true,
+    "onViolation": "block"
+  }
+}
+```
+
+### LLM-Generated Protocols
+
+Workers can propose new protocols validated against immutable base constraints:
+
+```
+1. get_base_constraints - View immutable security rules
+2. propose_protocol - Worker submits proposal
+3. review_proposals - See pending proposals with risk scores
+4. approve_protocol / reject_protocol - Human review for high-risk
+```
 
 ## Best Practices
 
@@ -243,11 +310,45 @@ A real-time web dashboard is available at `http://localhost:3456` when the MCP s
 ### Session & Progress
 | Tool | Purpose |
 |------|---------|
-| `get_progress_log` | Full history |
+| `get_progress_log` | Full history (paginated) |
 | `get_session_stats` | Success rates and timing metrics |
 | `pause_session` | Pause session, stop all workers |
 | `resume_session` | Resume paused session |
 | `commit_progress` | Git checkpoint |
+
+### Protocol Management
+| Tool | Purpose |
+|------|---------|
+| `protocol_register` | Register a new protocol definition |
+| `protocol_activate` | Activate protocol for enforcement |
+| `protocol_deactivate` | Deactivate protocol |
+| `protocol_list` | List all registered protocols |
+| `protocol_status` | Get protocol activation status |
+
+### Protocol Enforcement
+| Tool | Purpose |
+|------|---------|
+| `validate_feature_protocols` | Check if feature can run under active protocols |
+| `get_violations` | Get recorded violations (paginated) |
+| `resolve_violation` | Mark violation as resolved |
+| `get_audit_log` | Get protocol audit history |
+
+### LLM Protocol Generation
+| Tool | Purpose |
+|------|---------|
+| `get_base_constraints` | View immutable base constraints |
+| `propose_protocol` | Submit a protocol proposal |
+| `review_proposals` | List pending proposals with risk scores |
+| `approve_protocol` | Approve a protocol proposal |
+| `reject_protocol` | Reject a protocol proposal |
+
+### Protocol Networking
+| Tool | Purpose |
+|------|---------|
+| `export_protocols` | Export protocols to file |
+| `import_protocols` | Import protocols from file |
+| `sync_protocols` | Sync with other instances |
+| `discover_instances` | Discover other MCP instances |
 
 ## Example Session
 
@@ -293,6 +394,29 @@ Moving to feature-2...
 [Continue until all features complete]
 ```
 
+## Example: Using Protocols
+
+```
+User: "Refactor the authentication module but don't touch config files"
+
+Me: I'll set up a protocol to enforce this constraint.
+
+[protocol_register with safe-refactoring protocol that denies config paths]
+[protocol_activate: "safe-refactoring-v1"]
+
+[orchestrator_init with refactoring features]
+[start_worker for feature-1]
+
+# Worker is now constrained - if it tries to modify config files,
+# the violation will be logged and can be reviewed
+
+[check_worker shows progress]
+[get_violations to check for any constraint violations]
+
+[mark_complete, commit_progress]
+[protocol_deactivate: "safe-refactoring-v1"]
+```
+
 ## Troubleshooting
 
 ### "No active session"
@@ -317,3 +441,8 @@ Use `pause_session` to stop all workers gracefully, then `resume_session` when r
 
 ### Need to abort
 Use `orchestrator_reset` with confirm=true to kill all workers and clear state.
+
+### Protocol violations blocking work
+1. `get_violations` to see what was violated
+2. Either fix the issue or `resolve_violation` if it's a false positive
+3. Consider adjusting protocol constraints if too strict
