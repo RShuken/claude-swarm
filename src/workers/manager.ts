@@ -217,10 +217,11 @@ ${projectContext}
 
 ## Commit Format Example
 \`\`\`bash
-git add .
-git commit -m "feat(feature-name): implement the feature
+# Add only the specific files you changed for this feature
+git add src/path/to/file1.ts src/path/to/file2.ts
 
-🤖 Committed by claude-swarm worker ${feature.id}"
+# Commit with subject and attribution footer
+git commit -m "feat(feature-name): implement the feature" -m "🤖 Committed by claude-swarm worker ${feature.id}"
 \`\`\`
 
 ${customPrompt ? `\n## Additional Context\n${customPrompt}` : ""}
