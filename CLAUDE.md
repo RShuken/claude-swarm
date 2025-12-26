@@ -5,10 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ```bash
-npm run build      # Compile TypeScript and copy dashboard assets
-npm run dev        # Watch mode for TypeScript compilation
-npm start          # Run the compiled MCP server
-npm run inspector  # Debug with MCP Inspector
+npm run build         # Compile TypeScript and copy dashboard assets
+npm run dev           # Watch mode for TypeScript compilation
+npm start             # Run the compiled MCP server
+npm run inspector     # Debug with MCP Inspector
+npx tsc --noEmit      # Type-check without emitting (CI validation)
 ```
 
 **Install the MCP server** into Claude Code:
@@ -27,7 +28,7 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 
 ### Core Components
 
-**src/index.ts** (~4800 lines) - MCP server entry point registering 40+ tools. All tool handlers are defined inline. Tool schemas use Zod for validation. The file is structured by tool category: core orchestration, worker management, competitive planning, confidence monitoring, feature management, session control, protocol management, and protocol networking.
+**src/index.ts** - MCP server entry point registering 50+ tools. All tool handlers are defined inline. Tool schemas use Zod for validation. The file is structured by tool category: core orchestration, worker management, competitive planning, confidence monitoring, feature management, session control, post-completion reviews, protocol management, and protocol networking.
 
 **src/state/manager.ts** - Persistent state management using the "notebook pattern". Stores session state in `.claude/orchestrator/state.json` with atomic writes (temp file + rename). Also generates `claude-progress.txt` for human readability and `init.sh` for environment setup. Manages feature context (`FeatureContext`), routing config, and protocol bindings per feature.
 
@@ -36,6 +37,8 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 **src/workers/confidence.ts** - Multi-signal confidence scoring combining tool activity patterns (35%), self-reported confidence (35%), and output analysis (30%). Detects struggling workers via stuck loops, error patterns, and frustration language.
 
 **src/workers/enforcement-integration.ts** - Hooks protocol enforcement into the worker lifecycle. Validates constraints before worker spawns and monitors during execution.
+
+**src/workers/review-manager.ts** - Orchestrates post-completion code and architecture reviews. Parses worker logs to identify modified files, builds review prompts with session context, and aggregates findings into structured JSON. Review workers have read-only tool access (no Bash).
 
 ### Protocol Governance System
 
@@ -106,7 +109,9 @@ The protocol system enables behavioral constraints on workers. Located in `src/p
     ├── *.done                    # Completion marker files
     ├── *.status                  # Worker status JSON
     ├── *.plan.json               # Competitive planning results
-    └── *.confidence              # Self-reported confidence files
+    ├── *.confidence              # Self-reported confidence files
+    ├── code-review.findings.json # Code review results
+    └── architecture-review.findings.json # Architecture review results
 
 claude-progress.txt               # Human-readable progress log
 init.sh                           # Environment setup script (mode 0700)
@@ -118,6 +123,13 @@ init.sh                           # Environment setup script (mode 0700)
 |----------|---------|-------------|
 | `DASHBOARD_PORT` | `3456` | Dashboard HTTP port |
 | `ENABLE_DASHBOARD` | `true` | Set to `false` to disable |
+
+## TypeScript Configuration
+
+- **Target**: ES2022 with NodeNext module resolution
+- **Strict mode** enabled - all strict type checks enforced
+- **Declaration files** generated for type exports
+- Imports require `.js` extension for ESM compatibility (e.g., `import { foo } from './bar.js'`)
 
 ## Dependencies
 
