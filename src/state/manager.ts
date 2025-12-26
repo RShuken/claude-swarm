@@ -121,12 +121,71 @@ export interface ConfidenceConfig {
   autoAlert: boolean; // Log alerts to progressLog automatically
 }
 
+/**
+ * ReviewFindings - Structured output from code or architecture review workers
+ * Contains categorized issues with severity levels and actionable suggestions
+ */
+export interface ReviewFindings {
+  summary: string;
+  severity: "clean" | "minor" | "moderate" | "major" | "critical";
+  issues: Array<{
+    category: string;
+    severity: "info" | "warning" | "error";
+    file?: string;
+    line?: number;
+    message: string;
+    suggestion?: string;
+  }>;
+  recommendations: string[];
+}
+
+/**
+ * ReviewWorker - Tracks the state of a review worker (code or architecture)
+ * Review workers run after all implementation workers complete
+ */
+export interface ReviewWorker {
+  type: "code" | "architecture";
+  workerId: string;
+  sessionName: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  completedAt?: string;
+  findings?: ReviewFindings;
+}
+
+/**
+ * ReviewConfig - Configuration for automatic post-completion reviews
+ * Controls whether and how reviews are triggered after swarm completion
+ */
+export interface ReviewConfig {
+  enabled: boolean; // Whether auto-review is enabled
+  skipOnFailure: boolean; // Skip review if any features failed
+  codeReviewEnabled: boolean; // Enable code quality review
+  architectureReviewEnabled: boolean; // Enable architecture review
+}
+
+/**
+ * AggregatedReview - Combined results from all review workers
+ * Created by the orchestrator after all review workers complete
+ */
+export interface AggregatedReview {
+  completedAt: string;
+  codeReview?: ReviewFindings;
+  architectureReview?: ReviewFindings;
+  overallAssessment: string;
+}
+
 export interface OrchestratorState {
   projectDir: string;
   taskDescription: string;
   features: Feature[];
   workers: WorkerStatus[];
-  status: "in_progress" | "completed" | "completed_with_failures" | "paused";
+  status:
+    | "in_progress"
+    | "reviewing"
+    | "completed"
+    | "completed_with_failures"
+    | "paused";
   startTime: string;
   lastUpdated: string;
   completedAt?: string;
@@ -135,6 +194,11 @@ export interface OrchestratorState {
   // Confidence monitoring
   confidenceConfig?: ConfidenceConfig;
   confidenceAlerts?: ConfidenceAlert[];
+
+  // Post-completion reviews
+  reviewConfig?: ReviewConfig;
+  reviewWorkers?: ReviewWorker[];
+  aggregatedReview?: AggregatedReview;
 }
 
 // Maximum number of log entries to keep (prevents unbounded growth)

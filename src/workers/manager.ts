@@ -18,12 +18,16 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import { Feature, StateManager, WorkerStatus } from "../state/manager.js";
+import { z } from "zod";
 import {
   validateFeatureId,
   validateSessionName,
   shellQuote,
   sanitizeOutput,
+  ReviewFindingsSchema,
+  StructuredPlanSchema,
 } from "../utils/security.js";
+import type { ReviewFindings } from "../state/manager.js";
 import {
   getWorkerConfidence,
   AggregatedConfidence,
@@ -409,16 +413,25 @@ echo 'PLANNER_EXITED' >> ${shellQuote(logFile)}
 
   /**
    * Read a plan file for a feature
+   * Validates plan against Zod schema for type safety
    */
-  readPlanFile(featureId: string): any | null {
+  readPlanFile(featureId: string): z.infer<typeof StructuredPlanSchema> | null {
     const planFile = path.join(this.workerDir, `${featureId}.plan.json`);
     try {
       if (fs.existsSync(planFile)) {
         const content = fs.readFileSync(planFile, "utf-8");
-        return JSON.parse(content);
+        const parsed = JSON.parse(content);
+        const validated = StructuredPlanSchema.safeParse(parsed);
+        if (validated.success) {
+          return validated.data;
+        }
+        console.error(
+          `Invalid plan format for ${featureId}:`,
+          validated.error.issues
+        );
       }
-    } catch {
-      // Return null if parsing fails
+    } catch (error) {
+      console.error(`Error reading plan file for ${featureId}:`, error);
     }
     return null;
   }
@@ -1144,6 +1157,154 @@ echo 'WORKER_EXITED' >> ${shellQuote(logFile)}
       }
     } catch (error) {
       console.error("Error killing workers:", error);
+    }
+  }
+
+  /**
+   * Start a review worker (code or architecture review)
+   * Similar to planner workers: read-only tools + Write for findings file
+   * Returns a unique session name for tracking
+   */
+  async startReviewWorker(
+    type: "code" | "architecture",
+    prompt: string
+  ): Promise<StartWorkerResult> {
+    const timestamp = Date.now().toString(36);
+    const sessionName = `cc-reviewer-${type}-${timestamp}`;
+
+    // Check if tmux is available
+    try {
+      await execFileAsync("which", ["tmux"]);
+    } catch {
+      return {
+        success: false,
+        error: "tmux is not installed. Please install tmux first.",
+      };
+    }
+
+    try {
+      // Write prompt to a file
+      const promptFile = path.join(
+        this.workerDir,
+        `${type}-review.prompt`
+      );
+      fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
+
+      const logFile = path.join(
+        this.workerDir,
+        `${type}-review.log`
+      );
+
+      // Create wrapper script with read-only tools + Write for findings file
+      const wrapperScript = path.join(
+        this.workerDir,
+        `${type}-review.sh`
+      );
+      const scriptContent = `#!/bin/bash
+set -e
+cd ${shellQuote(this.projectDir)}
+PROMPT=$(cat ${shellQuote(promptFile)})
+# Review mode: read-only tools plus Write for the findings file
+# Note: Bash intentionally excluded for security - reviewers don't need shell access
+claude -p "$PROMPT" --allowedTools Read,Glob,Grep,Write 2>&1 | tee ${shellQuote(logFile)}
+echo 'REVIEWER_EXITED' >> ${shellQuote(logFile)}
+`;
+      fs.writeFileSync(wrapperScript, scriptContent, { mode: 0o700 });
+
+      // Start tmux session
+      await execFileAsync("tmux", [
+        "new-session",
+        "-d",
+        "-s",
+        sessionName,
+        "-c",
+        this.projectDir,
+        "bash",
+        wrapperScript,
+      ]);
+
+      // Create status file
+      const statusFile = path.join(
+        this.workerDir,
+        `${type}-review.status`
+      );
+      fs.writeFileSync(
+        statusFile,
+        JSON.stringify({
+          sessionName,
+          type,
+          startedAt: new Date().toISOString(),
+          status: "running",
+          mode: "review",
+        })
+      );
+
+      return {
+        success: true,
+        sessionName,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: sanitizeOutput(error.message),
+      };
+    }
+  }
+
+  /**
+   * Read review findings file for a specific review type
+   * Validates findings against Zod schema for type safety
+   */
+  readReviewFindings(type: "code" | "architecture"): ReviewFindings | null {
+    const findingsFile = path.join(
+      this.workerDir,
+      `${type}-review.findings.json`
+    );
+
+    try {
+      if (fs.existsSync(findingsFile)) {
+        const content = fs.readFileSync(findingsFile, "utf-8");
+        const parsed = JSON.parse(content);
+        const validated = ReviewFindingsSchema.safeParse(parsed);
+        if (validated.success) {
+          return validated.data;
+        }
+        console.error(
+          `Invalid ${type} review findings format:`,
+          validated.error.issues
+        );
+      }
+    } catch (error) {
+      console.error(`Error reading ${type} review findings:`, error);
+    }
+    return null;
+  }
+
+  /**
+   * Check if a review worker session is still running
+   */
+  async checkReviewWorker(
+    type: "code" | "architecture",
+    lines: number = 50
+  ): Promise<CheckWorkerResult> {
+    // Find the session name from status file
+    const statusFile = path.join(this.workerDir, `${type}-review.status`);
+
+    if (!fs.existsSync(statusFile)) {
+      return { status: "not_found" };
+    }
+
+    try {
+      const statusContent = JSON.parse(fs.readFileSync(statusFile, "utf-8"));
+      const sessionName = statusContent.sessionName;
+
+      if (!sessionName || !validateSessionName(sessionName)) {
+        return { status: "not_found" };
+      }
+
+      return await this.checkWorker(sessionName, lines);
+    } catch (error) {
+      return { status: "not_found" };
     }
   }
 

@@ -11,6 +11,7 @@ An MCP server for orchestrating parallel Claude Code worker swarms with protocol
 - **Confidence Monitoring** - Multi-signal scoring detects struggling workers
 - **Auto-retry** - Failed features automatically retry with configurable limits
 - **Feature Dependencies** - Define execution order between features
+- **Post-Completion Reviews** - Automated code and architecture reviews after swarm completes
 
 ### Protocol-Based Governance
 - **Behavioral Protocols** - Define constraints on what workers can/cannot do
@@ -68,7 +69,7 @@ Or manually orchestrate:
 
 ## Protocol System
 
-Protocols define behavioral constraints that govern worker actions. This enables safe autonomous operation with clear boundaries.
+Protocols define behavioral constraints that govern worker actions, enabling safe autonomous operation with clear boundaries.
 
 ### Constraint Types
 
@@ -100,17 +101,6 @@ Protocols define behavioral constraints that govern worker actions. This enables
       },
       "severity": "error",
       "message": "Cannot access files that may contain secrets"
-    },
-    {
-      "id": "read-only-config",
-      "type": "file_access",
-      "rule": {
-        "type": "file_access",
-        "allowedPaths": ["src/**/*.ts"],
-        "deniedPaths": ["**/config/**"]
-      },
-      "severity": "warning",
-      "message": "Avoid modifying configuration files during refactoring"
     }
   ],
   "enforcement": {
@@ -134,7 +124,7 @@ Protocols define behavioral constraints that govern worker actions. This enables
 
 ### LLM-Generated Protocols
 
-Workers can propose new protocols that are validated against immutable base constraints:
+Workers can propose new protocols validated against immutable base constraints:
 
 ```
 1. get_base_constraints - View immutable security rules
@@ -181,33 +171,62 @@ set_confidence_threshold(35)       # Configure alert level
 get_worker_confidence(featureId)   # Get detailed breakdown
 ```
 
+## Post-Completion Reviews
+
+Automated code and architecture reviews run after all workers complete:
+
+```
+1. All features complete → session status changes to "reviewing"
+2. Code review worker analyzes: bugs, security, style, test coverage
+3. Architecture review worker analyzes: coupling, patterns, scalability
+4. Findings aggregated into progress log
+5. Session completes with review summary
+```
+
+Review workers output structured JSON findings:
+- `.claude/orchestrator/workers/code-review.findings.json`
+- `.claude/orchestrator/workers/architecture-review.findings.json`
+
+**Severity levels**: clean, minor, moderate, major, critical
+
+Configure or trigger manually:
+```
+configure_reviews(enabled: true, skipOnFailure: false)
+run_review(reviewTypes: ["code", "architecture"])
+get_review_results(format: "detailed")
+```
+
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                        MCP Server                               │
-│            (Persistent state, survives compaction)              │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │    State     │  │    Worker    │  │   Protocol   │         │
-│  │   Manager    │  │   Manager    │  │   Registry   │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│         │                 │                  │                  │
-│  ┌──────┴─────────────────┴──────────────────┴───────────────┐ │
-│  │  Enforcement Engine  │  Resolver  │  Context Enricher     │ │
-│  └───────────────────────────────────────────────────────────┘ │
-│                              │                                  │
-│  ┌───────────────────────────┴───────────────────────────────┐ │
-│  │  Dashboard  │  Complexity Detector  │  Plan Evaluator     │ │
-│  └───────────────────────────────────────────────────────────┘ │
-└────────────────────────────────┬───────────────────────────────┘
-                                 │ MCP Protocol
-┌────────────────────────────────┼───────────────────────────────┐
-│                          Claude Code                            │
-│                                                                 │
-│     Context compacts → Just call orchestrator_status            │
-│     Protocol violations → Automatic blocking/warning            │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          MCP Server                                  │
+│              (Persistent state, survives compaction)                 │
+│                                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │    State     │  │    Worker    │  │   Protocol   │              │
+│  │   Manager    │  │   Manager    │  │   Registry   │              │
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
+│         │                 │                  │                       │
+│  ┌──────┴─────────────────┴──────────────────┴────────────────────┐ │
+│  │  Enforcement Engine  │  Resolver  │  Context Enricher          │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                              │                                       │
+│  ┌───────────────────────────┴────────────────────────────────────┐ │
+│  │  Review Manager  │  Complexity Detector  │  Plan Evaluator     │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                              │                                       │
+│  ┌───────────────────────────┴────────────────────────────────────┐ │
+│  │                     Web Dashboard (SSE)                         │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ MCP Protocol
+┌──────────────────────────────┼──────────────────────────────────────┐
+│                         Claude Code                                  │
+│                                                                      │
+│      Context compacts → Just call orchestrator_status                │
+│      Protocol violations → Automatic blocking/warning                │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## MCP Tools Reference
@@ -260,6 +279,14 @@ get_worker_confidence(featureId)   # Get detailed breakdown
 | `resume_session` | Resume paused session |
 | `commit_progress` | Create git checkpoint |
 
+### Post-Completion Reviews (4 tools)
+| Tool | Description |
+|------|-------------|
+| `run_review` | Manually trigger code/architecture reviews |
+| `check_reviews` | Monitor review worker status |
+| `get_review_results` | Get aggregated findings (summary/detailed/json) |
+| `configure_reviews` | Set auto-review preferences |
+
 ### Protocol Management (5 tools)
 | Tool | Description |
 |------|-------------|
@@ -267,7 +294,7 @@ get_worker_confidence(featureId)   # Get detailed breakdown
 | `protocol_activate` | Activate protocol for enforcement |
 | `protocol_deactivate` | Deactivate protocol |
 | `protocol_list` | List all registered protocols |
-| `protocol_status` | Get protocol activation status |
+| `protocol_status` | Get protocol details and violations |
 
 ### Protocol Enforcement (4 tools)
 | Tool | Description |
@@ -289,10 +316,18 @@ get_worker_confidence(featureId)   # Get detailed breakdown
 ### Protocol Networking (4 tools)
 | Tool | Description |
 |------|-------------|
-| `export_protocols` | Export protocols to file |
-| `import_protocols` | Import protocols from file |
-| `sync_protocols` | Sync with other instances |
-| `discover_instances` | Discover other MCP instances |
+| `export_protocols` | Export protocols to shareable bundle |
+| `import_protocols` | Import protocols from bundle |
+| `sync_protocols` | Sync with peer instances |
+| `discover_protocols` | Discover peer MCP instances |
+
+### Context Management (4 tools)
+| Tool | Description |
+|------|-------------|
+| `enrich_feature` | Auto-enrich feature with relevant docs and code |
+| `set_feature_context` | Manually set feature context |
+| `get_feature_graph` | View feature dependency graph with context |
+| `route_feature` | Configure worker routing preferences |
 
 ## Files Created
 
@@ -305,13 +340,17 @@ your-project/
 │   │   ├── registry.json       # Protocol definitions
 │   │   ├── active.json         # Active protocols
 │   │   ├── violations.json     # Violation records
+│   │   ├── audit.json          # Audit log
 │   │   └── proposals/          # Pending proposals
 │   ├── sync/                   # Cross-instance sync
 │   └── workers/
 │       ├── *.prompt            # Worker prompts
 │       ├── *.log               # Worker output logs
+│       ├── *.status            # Worker status
 │       ├── *.plan.json         # Competitive plans
-│       └── *.confidence        # Self-reported confidence
+│       ├── *.confidence        # Self-reported confidence
+│       ├── code-review.findings.json        # Code review results
+│       └── architecture-review.findings.json # Architecture review results
 ├── claude-progress.txt         # Human-readable log
 └── init.sh                     # Environment setup
 ```
@@ -333,6 +372,7 @@ your-project/
 - **No shell injection** - Uses `execFile` with arguments, prompts via files
 - **Input validation** - All inputs validated with Zod schemas
 - **Base constraints** - Immutable security rules cannot be overridden
+- **Review worker isolation** - Read-only tools (no Bash access)
 
 ## Inspiration
 

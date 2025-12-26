@@ -42,7 +42,7 @@ Use orchestrator_init with:
 
 ### 2. Work Loop
 
-**IMPORTANT: Workers typically take 5-10 minutes per feature.** Do NOT check workers immediately after starting them - this wastes context and provides no useful information.
+**IMPORTANT: Workers typically take 5-10 minutes per feature.** Do NOT check workers immediately after starting them.
 
 For each pending feature:
 
@@ -57,11 +57,6 @@ For each pending feature:
 8. commit_progress to checkpoint
 9. Repeat for next feature
 ```
-
-**Timing guidance:**
-- After starting a worker, run `sleep 120` (2 min) or `sleep 180` (3 min) before checking
-- If worker is still in progress, wait another 2-3 minutes before the next check
-- Most features complete in 5-10 minutes; complex features may take longer
 
 For parallel execution:
 ```
@@ -160,71 +155,41 @@ Workers can propose new protocols validated against immutable base constraints:
 ### Parallel Execution
 - Identify features that can run in parallel (no shared dependencies)
 - Use `start_parallel_workers` to launch up to 10 workers at once
-- Monitor all workers with `check_worker` for each feature ID
+- Monitor all workers with `check_all_workers`
 - Independent features complete faster when parallelized
 
 ### Monitoring Workers
-- **Wait 2-3 minutes after starting before first check** - workers need time to make progress
-- Use `sleep 120` or `sleep 180` between starting a worker and checking it
-- If worker is still in progress, wait another 2-3 minutes before checking again
+- **Wait 2-3 minutes after starting before first check**
+- Use `sleep 120` or `sleep 180` between starting and checking
 - Workers typically complete features in 5-10 minutes
-- If a worker seems stuck after 10+ minutes, review its output carefully
+- If stuck after 10+ minutes, review output carefully
 - Use `send_worker_message` to provide guidance without restarting
-- Kill stuck workers and retry with more specific instructions
 
 ### Efficient Monitoring with Heartbeat Mode
-Use `check_worker` with `heartbeat: true` for lightweight status checks that save context:
+Use `check_worker` with `heartbeat: true` for lightweight status checks:
 ```
 check_worker(featureId, heartbeat: true)
 → Returns: status, lastToolUsed, lastFile, lastActivity, runningFor
 ```
-Use `check_all_workers` with `heartbeat: true` to check all active workers at once.
-
-### Incremental Output with Cursor Mode
-For long-running workers, use `sinceLine` to get only new output:
-```
-check_worker(featureId, sinceLine: 0)    → Returns lines 0-50, cursor: 50
-check_worker(featureId, sinceLine: 50)   → Returns lines 50-75, cursor: 75
-```
-This reduces context usage when monitoring verbose workers.
-
-### Auto Completion Detection
-The orchestrator automatically monitors workers and logs when they complete or crash:
-- Logs appear in `progressLog` and stderr
-- Format: `🔔 Worker completed: feature-1 - use mark_complete to update status`
-- You still need to call `mark_complete` to update feature status
 
 ### Competitive Planning for Complex Features
-For complex features, use competitive planning to get two different implementation approaches:
+For complex features (score >= 60), use competitive planning:
 
 ```
-1. get_feature_complexity(featureId) - Analyze if feature is complex enough
-2. If score >= 60, use start_competitive_planning(featureId)
-   - Spawns 2 planners with different approaches (A: incremental, B: elegant)
-   - Each creates an implementation plan in JSON format
-3. Wait for planners to complete (typically 3-5 minutes)
-4. evaluate_plans(featureId) - Compare plans and pick winner
+1. get_feature_complexity(featureId) - Analyze complexity
+2. start_competitive_planning(featureId) - Spawn 2 planners
+3. Wait for planners to complete (3-5 minutes)
+4. evaluate_plans(featureId) - Compare and pick winner
 5. start_worker with the winning plan as context
 ```
 
-Complexity is scored based on:
-- Description length and keywords (refactor, migrate, integrate)
-- Scope indicators (multiple, all, system-wide)
-- Dependency count and estimated files to modify
-
-### Confidence-Based Worker Monitoring
+### Confidence-Based Monitoring
 Track worker confidence to detect issues early:
 
 ```
-1. set_confidence_threshold(35) - Configure alert threshold (default: 35%)
-2. get_worker_confidence(featureId) - Get detailed confidence breakdown
-3. check_worker with heartbeat: true includes confidence score automatically
+1. set_confidence_threshold(35) - Configure alert threshold
+2. get_worker_confidence(featureId) - Get detailed breakdown
 ```
-
-Confidence combines three signals:
-- **Tool Activity (35%)**: Read→Edit→Test cycles, stuck loops, idle periods
-- **Self-Reported (35%)**: Workers periodically report their confidence
-- **Output Analysis (30%)**: Error patterns, success indicators, frustration language
 
 Confidence levels:
 - **High (80-100)**: On track
@@ -232,39 +197,44 @@ Confidence levels:
 - **Low (25-49)**: May need guidance
 - **Critical (0-24)**: Immediate attention
 
+### Post-Completion Reviews
+After all workers complete, automated reviews run automatically:
+
+```
+1. All workers complete → session transitions to "reviewing" status
+2. Code review worker analyzes: bugs, security, style, test coverage
+3. Architecture review worker analyzes: coupling, patterns, scalability
+4. Findings aggregated into progress log
+5. Use get_review_results for detailed findings
+```
+
+Review configuration:
+- `configure_reviews(enabled: false)` - Disable automatic reviews
+- `run_review(reviewTypes: ["code"])` - Manually run specific reviews
+
 ### Error Recovery
-- If a worker fails, check the error in check_worker output
 - Auto-retry is enabled by default (3 attempts) via `mark_complete`
 - Use `retry_feature` to manually reset after fixing issues
-- Add clarifying context when retrying with start_worker
-- Use add_feature if you discover missing work
+- Use `add_feature` if you discover missing work
 
 ### Session Management
-- Use `pause_session` to gracefully stop work (kills all workers)
+- Use `pause_session` to gracefully stop work
 - Use `resume_session` to continue where you left off
-- Use `get_session_stats` to monitor success rates and timing
+- Use `get_session_stats` for success rates and timing
 
 ### Git Checkpoints
-- Commit after each successful feature
+- Commit after each successful feature with `commit_progress`
 - Use descriptive commit messages
-- This allows easy rollback if needed
+- Enables easy rollback if needed
 
 ## Web Dashboard
 
-A real-time web dashboard is available at `http://localhost:3456` when the MCP server is running.
-
-### Dashboard Features
-- **Live updates** via Server-Sent Events (no manual refresh needed)
-- **Session overview** with progress bar and elapsed time
-- **Feature cards** with status, attempts, and dependencies
-- **Worker terminal output** streaming in a modal
-- **Activity log** with timestamps
-- **Dark mode** toggle (persists in localStorage)
-- **Mobile responsive** layout
-
-### Configuration
-- `DASHBOARD_PORT=3456` - Change the dashboard port
-- `ENABLE_DASHBOARD=false` - Disable the dashboard entirely
+A real-time web dashboard is available at `http://localhost:3456`:
+- Live updates via Server-Sent Events
+- Session overview with progress bar
+- Feature cards with status and dependencies
+- Worker terminal output streaming
+- Dark mode support
 
 ## Tools Reference
 
@@ -279,76 +249,76 @@ A real-time web dashboard is available at `http://localhost:3456` when the MCP s
 | Tool | Purpose |
 |------|---------|
 | `start_worker` | Launch worker for a feature |
-| `start_parallel_workers` | Launch multiple workers for independent features |
-| `validate_workers` | Pre-flight validation before parallel execution |
-| `check_worker` | Monitor worker output (supports heartbeat + cursor modes) |
+| `start_parallel_workers` | Launch multiple workers |
+| `validate_workers` | Pre-flight validation |
+| `check_worker` | Monitor worker output (heartbeat + cursor modes) |
 | `check_all_workers` | Check all active workers at once |
-| `send_worker_message` | Send follow-up instructions to running worker |
+| `send_worker_message` | Send instructions to running worker |
 
 ### Competitive Planning
 | Tool | Purpose |
 |------|---------|
-| `get_feature_complexity` | Analyze complexity and get planning recommendation |
-| `start_competitive_planning` | Spawn 2 planners to create competing implementation plans |
-| `evaluate_plans` | Compare plans and select winner |
+| `get_feature_complexity` | Analyze complexity score |
+| `start_competitive_planning` | Spawn 2 planners |
+| `evaluate_plans` | Compare and select winner |
 
 ### Confidence Monitoring
 | Tool | Purpose |
 |------|---------|
-| `get_worker_confidence` | Get detailed confidence breakdown for a worker |
-| `set_confidence_threshold` | Configure alert threshold (default: 35%) |
+| `get_worker_confidence` | Get confidence breakdown |
+| `set_confidence_threshold` | Configure alert threshold |
 
 ### Feature Management
 | Tool | Purpose |
 |------|---------|
-| `mark_complete` | Mark feature done/failed (with auto-retry) |
-| `retry_feature` | Reset failed feature for manual retry |
-| `run_verification` | Run tests/build to verify |
+| `mark_complete` | Mark feature done/failed (auto-retry) |
+| `retry_feature` | Reset for manual retry |
+| `run_verification` | Run tests/build |
 | `add_feature` | Add discovered work |
-| `set_dependencies` | Define feature dependencies |
+| `set_dependencies` | Define dependencies |
 
 ### Session & Progress
 | Tool | Purpose |
 |------|---------|
 | `get_progress_log` | Full history (paginated) |
-| `get_session_stats` | Success rates and timing metrics |
-| `pause_session` | Pause session, stop all workers |
+| `get_session_stats` | Success rates and timing |
+| `pause_session` | Pause, stop all workers |
 | `resume_session` | Resume paused session |
 | `commit_progress` | Git checkpoint |
+
+### Post-Completion Reviews
+| Tool | Purpose |
+|------|---------|
+| `run_review` | Manually trigger reviews |
+| `check_reviews` | Monitor review worker progress |
+| `get_review_results` | Get aggregated findings |
+| `configure_reviews` | Configure automatic reviews |
 
 ### Protocol Management
 | Tool | Purpose |
 |------|---------|
-| `protocol_register` | Register a new protocol definition |
-| `protocol_activate` | Activate protocol for enforcement |
+| `protocol_register` | Register a protocol |
+| `protocol_activate` | Activate for enforcement |
 | `protocol_deactivate` | Deactivate protocol |
-| `protocol_list` | List all registered protocols |
-| `protocol_status` | Get protocol activation status |
+| `protocol_list` | List all protocols |
+| `protocol_status` | Get protocol status |
 
 ### Protocol Enforcement
 | Tool | Purpose |
 |------|---------|
-| `validate_feature_protocols` | Check if feature can run under active protocols |
-| `get_violations` | Get recorded violations (paginated) |
-| `resolve_violation` | Mark violation as resolved |
-| `get_audit_log` | Get protocol audit history |
+| `validate_feature_protocols` | Check feature against protocols |
+| `get_violations` | Get violations (paginated) |
+| `resolve_violation` | Mark violation resolved |
+| `get_audit_log` | Get audit history |
 
 ### LLM Protocol Generation
 | Tool | Purpose |
 |------|---------|
-| `get_base_constraints` | View immutable base constraints |
-| `propose_protocol` | Submit a protocol proposal |
-| `review_proposals` | List pending proposals with risk scores |
-| `approve_protocol` | Approve a protocol proposal |
-| `reject_protocol` | Reject a protocol proposal |
-
-### Protocol Networking
-| Tool | Purpose |
-|------|---------|
-| `export_protocols` | Export protocols to file |
-| `import_protocols` | Import protocols from file |
-| `sync_protocols` | Sync with other instances |
-| `discover_instances` | Discover other MCP instances |
+| `get_base_constraints` | View immutable constraints |
+| `propose_protocol` | Submit proposal |
+| `review_proposals` | List pending proposals |
+| `approve_protocol` | Approve proposal |
+| `reject_protocol` | Reject proposal |
 
 ## Example Session
 
@@ -364,14 +334,13 @@ Me: I'll orchestrate building this API. Let me initialize the session.
 2. Create Todo model with Mongoose
 3. Implement POST /todos endpoint
 4. Implement GET /todos endpoint
-5. Implement GET /todos/:id endpoint
-6. Implement PUT /todos/:id endpoint
-7. Implement DELETE /todos/:id endpoint
-8. Add input validation middleware
-9. Add error handling middleware
-10. Write integration tests]
+5. Implement PUT /todos/:id endpoint
+6. Implement DELETE /todos/:id endpoint
+7. Add input validation middleware
+8. Add error handling middleware
+9. Write integration tests]
 
-Session initialized with 10 features.
+Session initialized with 9 features.
 
 [start_worker for feature-1]
 Worker started: cc-worker-feature-1-abc123
@@ -392,29 +361,8 @@ Moving to feature-2...
 ...
 
 [Continue until all features complete]
-```
-
-## Example: Using Protocols
-
-```
-User: "Refactor the authentication module but don't touch config files"
-
-Me: I'll set up a protocol to enforce this constraint.
-
-[protocol_register with safe-refactoring protocol that denies config paths]
-[protocol_activate: "safe-refactoring-v1"]
-
-[orchestrator_init with refactoring features]
-[start_worker for feature-1]
-
-# Worker is now constrained - if it tries to modify config files,
-# the violation will be logged and can be reviewed
-
-[check_worker shows progress]
-[get_violations to check for any constraint violations]
-
-[mark_complete, commit_progress]
-[protocol_deactivate: "safe-refactoring-v1"]
+[Automatic code and architecture reviews run]
+[get_review_results to see findings]
 ```
 
 ## Troubleshooting
@@ -424,25 +372,25 @@ Run `orchestrator_status` to check state, or `orchestrator_init` to start fresh.
 
 ### Worker seems stuck
 1. `check_worker` to see current output
-2. Try `send_worker_message` to give it guidance
+2. Try `send_worker_message` to give guidance
 3. If truly stuck, `mark_complete` with success=false (will auto-retry)
-4. If auto-retries exhausted, use `retry_feature` to reset manually
+4. If retries exhausted, use `retry_feature` to reset
 
 ### Feature has unmet dependencies
-1. Check which features it depends on with `orchestrator_status`
-2. Complete the dependency features first
-3. Or use `set_dependencies` to modify the dependency chain
+1. Check dependencies with `orchestrator_status`
+2. Complete dependency features first
+3. Or use `set_dependencies` to modify the chain
 
 ### Lost context after compaction
-Just call `orchestrator_status` - the MCP server maintains all state independently.
+Call `orchestrator_status` - the MCP server maintains all state.
 
 ### Need to pause temporarily
-Use `pause_session` to stop all workers gracefully, then `resume_session` when ready.
+Use `pause_session` to stop workers, then `resume_session` when ready.
 
 ### Need to abort
 Use `orchestrator_reset` with confirm=true to kill all workers and clear state.
 
 ### Protocol violations blocking work
 1. `get_violations` to see what was violated
-2. Either fix the issue or `resolve_violation` if it's a false positive
-3. Consider adjusting protocol constraints if too strict
+2. Fix the issue or `resolve_violation` if false positive
+3. Adjust protocol constraints if too strict

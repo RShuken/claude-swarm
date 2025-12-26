@@ -85,10 +85,10 @@ export function validateFeatureId(id: string): string {
 
 /**
  * Validate tmux session name
- * Supports both worker sessions (cc-worker-*) and planner sessions (cc-planner-*)
+ * Supports worker (cc-worker-*), planner (cc-planner-*), and reviewer (cc-reviewer-*) sessions
  */
 export function validateSessionName(name: string): boolean {
-  return /^cc-(worker|planner)-[a-zA-Z0-9_-]+-[a-z0-9]+$/.test(name);
+  return /^cc-(worker|planner|reviewer)-[a-zA-Z0-9_-]+-[a-z0-9]+$/.test(name);
 }
 
 /**
@@ -372,6 +372,61 @@ export const ConfidenceConfigSchema = z.object({
 });
 
 /**
+ * Zod schema for review issue
+ */
+export const ReviewIssueSchema = z.object({
+  category: z.string().max(100),
+  severity: z.enum(["info", "warning", "error"]),
+  file: z.string().max(500).optional(),
+  line: z.number().int().min(1).optional(),
+  message: z.string().max(1000),
+  suggestion: z.string().max(1000).optional(),
+});
+
+/**
+ * Zod schema for review findings
+ */
+export const ReviewFindingsSchema = z.object({
+  summary: z.string().max(2000),
+  severity: z.enum(["clean", "minor", "moderate", "major", "critical"]),
+  issues: z.array(ReviewIssueSchema),
+  recommendations: z.array(z.string().max(500)),
+});
+
+/**
+ * Zod schema for review worker
+ */
+export const ReviewWorkerSchema = z.object({
+  type: z.enum(["code", "architecture"]),
+  workerId: z.string(),
+  sessionName: z.string(),
+  status: z.enum(["running", "completed", "failed"]),
+  startedAt: z.string(),
+  completedAt: z.string().optional(),
+  findings: ReviewFindingsSchema.optional(),
+});
+
+/**
+ * Zod schema for review config
+ */
+export const ReviewConfigSchema = z.object({
+  enabled: z.boolean(),
+  skipOnFailure: z.boolean(),
+  codeReviewEnabled: z.boolean(),
+  architectureReviewEnabled: z.boolean(),
+});
+
+/**
+ * Zod schema for aggregated review
+ */
+export const AggregatedReviewSchema = z.object({
+  completedAt: z.string(),
+  codeReview: ReviewFindingsSchema.optional(),
+  architectureReview: ReviewFindingsSchema.optional(),
+  overallAssessment: z.string().max(2000),
+});
+
+/**
  * Zod schema for validating orchestrator state
  */
 export const OrchestratorStateSchema = z.object({
@@ -389,6 +444,7 @@ export const OrchestratorStateSchema = z.object({
   ),
   status: z.enum([
     "in_progress",
+    "reviewing",
     "completed",
     "completed_with_failures",
     "paused",
@@ -400,4 +456,8 @@ export const OrchestratorStateSchema = z.object({
   // Confidence monitoring
   confidenceConfig: ConfidenceConfigSchema.optional(),
   confidenceAlerts: z.array(ConfidenceAlertSchema).optional(),
+  // Post-completion reviews
+  reviewConfig: ReviewConfigSchema.optional(),
+  reviewWorkers: z.array(ReviewWorkerSchema).optional(),
+  aggregatedReview: AggregatedReviewSchema.optional(),
 });

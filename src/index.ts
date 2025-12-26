@@ -18,8 +18,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { StateManager, OrchestratorState, Feature, WorkerStatus } from "./state/manager.js";
+import { StateManager, OrchestratorState, Feature, WorkerStatus, ReviewWorker, ReviewConfig, AggregatedReview } from "./state/manager.js";
 import { WorkerManager } from "./workers/manager.js";
+import { ReviewManager, DEFAULT_REVIEW_CONFIG } from "./workers/review-manager.js";
 import { generateFeatureList } from "./utils/feature-generator.js";
 import { formatDuration, formatPercent, formatDurationMs, calculateAverage } from "./utils/format.js";
 import {
@@ -1099,11 +1100,38 @@ server.tool(
 
     // Check if all features are done (only completed or permanently failed)
     const allDone = current.features.every(f => f.status === "completed" || f.status === "failed");
+    let reviewsStarted = false;
+
     if (allDone) {
       const allSucceeded = current.features.every(f => f.status === "completed");
-      current.status = allSucceeded ? "completed" : "completed_with_failures";
-      current.completedAt = new Date().toISOString();
-      current.progressLog.push(`[${new Date().toISOString()}] 🏁 Orchestration ${allSucceeded ? "completed successfully" : "completed with failures"}`);
+
+      // Check if reviews should be triggered
+      const reviewConfig = current.reviewConfig || DEFAULT_REVIEW_CONFIG;
+      const shouldReview = reviewConfig.enabled &&
+        (allSucceeded || !reviewConfig.skipOnFailure) &&
+        (reviewConfig.codeReviewEnabled || reviewConfig.architectureReviewEnabled);
+
+      if (shouldReview) {
+        // Transition to reviewing status instead of completed
+        current.status = "reviewing";
+        current.progressLog.push(`[${new Date().toISOString()}] 🔍 All features done. Starting automated reviews...`);
+
+        // Start review workers
+        const reviewManager = new ReviewManager(projectDir);
+        const reviewWorkers = await reviewManager.startReviews(current, workers, reviewConfig);
+        current.reviewWorkers = reviewWorkers;
+        reviewsStarted = reviewWorkers.length > 0;
+
+        if (reviewWorkers.length > 0) {
+          current.progressLog.push(`[${new Date().toISOString()}] 🔍 Started ${reviewWorkers.length} review worker(s)`);
+        }
+        // Note: completedAt is NOT set yet - wait for reviews
+      } else {
+        // No reviews configured - complete normally
+        current.status = allSucceeded ? "completed" : "completed_with_failures";
+        current.completedAt = new Date().toISOString();
+        current.progressLog.push(`[${new Date().toISOString()}] 🏁 Orchestration ${allSucceeded ? "completed successfully" : "completed with failures"}`);
+      }
     }
 
     state.save(current);
@@ -1118,7 +1146,9 @@ server.tool(
       responseText += `\n\n💡 Feature will be retried. Use start_worker to launch a new attempt.`;
     }
 
-    if (allDone) {
+    if (allDone && reviewsStarted) {
+      responseText += `\n\n🔍 All features processed! Reviews started. Use check_reviews to monitor progress.`;
+    } else if (allDone) {
       responseText += `\n\n🏁 All features processed!`;
     }
 
@@ -4837,6 +4867,336 @@ server.tool(
         response += `   Use offset=${offset + limit} to see more.\n`;
       }
     }
+
+    return {
+      content: [{ type: "text", text: response }],
+    };
+  }
+);
+
+// ============================================================================
+// TOOL: run_review
+// ============================================================================
+server.tool(
+  "run_review",
+  "Manually trigger code and/or architecture reviews. Can be called at any time, but typically after features complete.",
+  {
+    projectDir: z.string().describe("Absolute path to the project directory"),
+    reviewTypes: z.array(z.enum(["code", "architecture"])).optional()
+      .describe("Types of reviews to run (default: both)"),
+    forceRerun: z.boolean().optional()
+      .describe("Re-run even if reviews already completed (default: false)"),
+  },
+  async ({ projectDir, reviewTypes = ["code", "architecture"], forceRerun = false }) => {
+    const { state, workers } = await ensureInitialized(projectDir);
+    const current = state.load();
+
+    if (!current) {
+      return {
+        content: [{ type: "text", text: "❌ No active orchestration session. Use orchestrator_init first." }],
+      };
+    }
+
+    // Check if reviews already exist and forceRerun is not set
+    if (!forceRerun && current.reviewWorkers && current.reviewWorkers.length > 0) {
+      const hasRunningReviews = current.reviewWorkers.some(r => r.status === "running");
+      if (hasRunningReviews) {
+        return {
+          content: [{ type: "text", text: "⚠️ Reviews are already running. Use check_reviews to monitor progress." }],
+        };
+      }
+    }
+
+    // Build review config from requested types
+    const reviewConfig: ReviewConfig = {
+      enabled: true,
+      skipOnFailure: false,
+      codeReviewEnabled: reviewTypes.includes("code"),
+      architectureReviewEnabled: reviewTypes.includes("architecture"),
+    };
+
+    // Start reviews
+    const reviewManager = new ReviewManager(projectDir);
+    const reviewWorkers = await reviewManager.startReviews(current, workers, reviewConfig);
+
+    if (reviewWorkers.length === 0) {
+      return {
+        content: [{ type: "text", text: "❌ No review workers started. Check configuration." }],
+      };
+    }
+
+    // Update state
+    current.reviewWorkers = reviewWorkers;
+    if (current.status === "completed" || current.status === "completed_with_failures") {
+      current.status = "reviewing";
+    }
+    current.progressLog.push(`[${new Date().toISOString()}] 🔍 Manually started ${reviewWorkers.length} review worker(s)`);
+    state.save(current);
+    state.writeProgressFile();
+
+    const started = reviewWorkers.map(r => `${r.type} (${r.sessionName})`).join(", ");
+
+    return {
+      content: [{
+        type: "text",
+        text: `🔍 Started ${reviewWorkers.length} review worker(s):\n${started}\n\nUse check_reviews to monitor progress.`,
+      }],
+    };
+  }
+);
+
+// ============================================================================
+// TOOL: check_reviews
+// ============================================================================
+server.tool(
+  "check_reviews",
+  "Check the status and output of running review workers.",
+  {
+    projectDir: z.string().describe("Absolute path to the project directory"),
+    includeOutput: z.boolean().optional().describe("Include recent output (default: true)"),
+    outputLines: z.number().optional().describe("Number of output lines to include (default: 30)"),
+  },
+  async ({ projectDir, includeOutput = true, outputLines = 30 }) => {
+    const { state, workers } = await ensureInitialized(projectDir);
+    const current = state.load();
+
+    if (!current) {
+      return {
+        content: [{ type: "text", text: "❌ No active orchestration session." }],
+      };
+    }
+
+    if (!current.reviewWorkers || current.reviewWorkers.length === 0) {
+      return {
+        content: [{ type: "text", text: "❌ No review workers found. Use run_review to start reviews." }],
+      };
+    }
+
+    // Check and update review worker status
+    const reviewManager = new ReviewManager(projectDir);
+    const { allDone, reviewWorkers } = await reviewManager.checkReviewStatus(
+      current.reviewWorkers,
+      workers
+    );
+
+    // Update state with new status
+    current.reviewWorkers = reviewWorkers;
+
+    // If all reviews are done, aggregate and complete
+    if (allDone && current.status === "reviewing") {
+      current.aggregatedReview = reviewManager.aggregateReviews(reviewWorkers);
+      const allFeaturesSucceeded = current.features.every(f => f.status === "completed");
+      current.status = allFeaturesSucceeded ? "completed" : "completed_with_failures";
+      current.completedAt = new Date().toISOString();
+
+      // Add review findings to progress log
+      const reviewLogs = reviewManager.formatReviewsForLog(current.aggregatedReview);
+      current.progressLog.push(...reviewLogs);
+      current.progressLog.push(`[${new Date().toISOString()}] 🏁 Orchestration completed with reviews.`);
+    }
+
+    state.save(current);
+    state.writeProgressFile();
+
+    // Build response
+    let response = `## Review Status\n\n`;
+
+    for (const reviewer of reviewWorkers) {
+      const statusIcon = reviewer.status === "completed" ? "✅" :
+        reviewer.status === "failed" ? "❌" : "🔄";
+      response += `${statusIcon} **${reviewer.type.toUpperCase()} Review**: ${reviewer.status}\n`;
+      response += `   Session: ${reviewer.sessionName}\n`;
+      response += `   Started: ${reviewer.startedAt}\n`;
+      if (reviewer.completedAt) {
+        response += `   Completed: ${reviewer.completedAt}\n`;
+      }
+      if (reviewer.findings) {
+        response += `   Severity: ${reviewer.findings.severity}\n`;
+        response += `   Issues: ${reviewer.findings.issues.length}\n`;
+      }
+
+      // Include output if requested and worker is running
+      if (includeOutput && reviewer.status === "running") {
+        const result = await workers.checkReviewWorker(reviewer.type, outputLines);
+        if (result.output) {
+          response += `\n   Recent output:\n   \`\`\`\n   ${result.output.split("\n").slice(-10).join("\n   ")}\n   \`\`\`\n`;
+        }
+      }
+      response += "\n";
+    }
+
+    if (allDone) {
+      response += `\n🏁 All reviews completed! Use get_review_results for detailed findings.`;
+    }
+
+    return {
+      content: [{ type: "text", text: response }],
+    };
+  }
+);
+
+// ============================================================================
+// TOOL: get_review_results
+// ============================================================================
+server.tool(
+  "get_review_results",
+  "Get the aggregated review findings after reviews complete.",
+  {
+    projectDir: z.string().describe("Absolute path to the project directory"),
+    format: z.enum(["summary", "detailed", "json"]).optional()
+      .describe("Output format (default: summary)"),
+  },
+  async ({ projectDir, format = "summary" }) => {
+    const { state } = await ensureInitialized(projectDir);
+    const current = state.load();
+
+    if (!current) {
+      return {
+        content: [{ type: "text", text: "❌ No active orchestration session." }],
+      };
+    }
+
+    if (!current.aggregatedReview) {
+      // Check if reviews are still running
+      if (current.reviewWorkers && current.reviewWorkers.some(r => r.status === "running")) {
+        return {
+          content: [{ type: "text", text: "⏳ Reviews are still in progress. Use check_reviews to monitor." }],
+        };
+      }
+      return {
+        content: [{ type: "text", text: "❌ No review results available. Use run_review first." }],
+      };
+    }
+
+    const review = current.aggregatedReview;
+
+    if (format === "json") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(review, null, 2) }],
+      };
+    }
+
+    let response = `## Review Results\n\n`;
+    response += `**Overall Assessment**: ${review.overallAssessment}\n`;
+    response += `**Completed**: ${review.completedAt}\n\n`;
+
+    // Code Review
+    if (review.codeReview) {
+      const cr = review.codeReview;
+      response += `### Code Review\n`;
+      response += `**Severity**: ${cr.severity}\n`;
+      response += `**Summary**: ${cr.summary}\n\n`;
+
+      if (format === "detailed" && cr.issues.length > 0) {
+        response += `**Issues (${cr.issues.length}):**\n`;
+        for (const issue of cr.issues) {
+          const icon = issue.severity === "error" ? "🔴" :
+            issue.severity === "warning" ? "🟡" : "🔵";
+          response += `${icon} [${issue.category}] ${issue.message}`;
+          if (issue.file) response += ` (${issue.file}${issue.line ? `:${issue.line}` : ""})`;
+          response += "\n";
+          if (issue.suggestion) response += `   → ${issue.suggestion}\n`;
+        }
+        response += "\n";
+      } else if (cr.issues.length > 0) {
+        const errors = cr.issues.filter(i => i.severity === "error").length;
+        const warnings = cr.issues.filter(i => i.severity === "warning").length;
+        const infos = cr.issues.filter(i => i.severity === "info").length;
+        response += `**Issues**: ${errors} errors, ${warnings} warnings, ${infos} info\n\n`;
+      }
+
+      if (cr.recommendations.length > 0) {
+        response += `**Recommendations**:\n`;
+        for (const rec of cr.recommendations) {
+          response += `- ${rec}\n`;
+        }
+        response += "\n";
+      }
+    }
+
+    // Architecture Review
+    if (review.architectureReview) {
+      const ar = review.architectureReview;
+      response += `### Architecture Review\n`;
+      response += `**Severity**: ${ar.severity}\n`;
+      response += `**Summary**: ${ar.summary}\n\n`;
+
+      if (format === "detailed" && ar.issues.length > 0) {
+        response += `**Issues (${ar.issues.length}):**\n`;
+        for (const issue of ar.issues) {
+          const icon = issue.severity === "error" ? "🔴" :
+            issue.severity === "warning" ? "🟡" : "🔵";
+          response += `${icon} [${issue.category}] ${issue.message}`;
+          if (issue.file) response += ` (${issue.file}${issue.line ? `:${issue.line}` : ""})`;
+          response += "\n";
+          if (issue.suggestion) response += `   → ${issue.suggestion}\n`;
+        }
+        response += "\n";
+      } else if (ar.issues.length > 0) {
+        const errors = ar.issues.filter(i => i.severity === "error").length;
+        const warnings = ar.issues.filter(i => i.severity === "warning").length;
+        const infos = ar.issues.filter(i => i.severity === "info").length;
+        response += `**Issues**: ${errors} errors, ${warnings} warnings, ${infos} info\n\n`;
+      }
+
+      if (ar.recommendations.length > 0) {
+        response += `**Recommendations**:\n`;
+        for (const rec of ar.recommendations) {
+          response += `- ${rec}\n`;
+        }
+      }
+    }
+
+    return {
+      content: [{ type: "text", text: response }],
+    };
+  }
+);
+
+// ============================================================================
+// TOOL: configure_reviews
+// ============================================================================
+server.tool(
+  "configure_reviews",
+  "Configure automatic post-completion review settings.",
+  {
+    projectDir: z.string().describe("Absolute path to the project directory"),
+    enabled: z.boolean().optional().describe("Enable/disable automatic reviews"),
+    skipOnFailure: z.boolean().optional().describe("Skip reviews if any features failed"),
+    codeReviewEnabled: z.boolean().optional().describe("Enable code quality reviews"),
+    architectureReviewEnabled: z.boolean().optional().describe("Enable architecture reviews"),
+  },
+  async ({ projectDir, enabled, skipOnFailure, codeReviewEnabled, architectureReviewEnabled }) => {
+    const { state } = await ensureInitialized(projectDir);
+    const current = state.load();
+
+    if (!current) {
+      return {
+        content: [{ type: "text", text: "❌ No active orchestration session. Use orchestrator_init first." }],
+      };
+    }
+
+    // Get current config or defaults
+    const currentConfig = current.reviewConfig || DEFAULT_REVIEW_CONFIG;
+
+    // Update with provided values
+    const newConfig: ReviewConfig = {
+      enabled: enabled ?? currentConfig.enabled,
+      skipOnFailure: skipOnFailure ?? currentConfig.skipOnFailure,
+      codeReviewEnabled: codeReviewEnabled ?? currentConfig.codeReviewEnabled,
+      architectureReviewEnabled: architectureReviewEnabled ?? currentConfig.architectureReviewEnabled,
+    };
+
+    current.reviewConfig = newConfig;
+    current.progressLog.push(`[${new Date().toISOString()}] ⚙️ Review configuration updated`);
+    state.save(current);
+    state.writeProgressFile();
+
+    let response = `## Review Configuration Updated\n\n`;
+    response += `- **Auto-review enabled**: ${newConfig.enabled ? "Yes" : "No"}\n`;
+    response += `- **Skip on feature failure**: ${newConfig.skipOnFailure ? "Yes" : "No"}\n`;
+    response += `- **Code review**: ${newConfig.codeReviewEnabled ? "Enabled" : "Disabled"}\n`;
+    response += `- **Architecture review**: ${newConfig.architectureReviewEnabled ? "Enabled" : "Disabled"}\n`;
 
     return {
       content: [{ type: "text", text: response }],
