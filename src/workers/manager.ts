@@ -128,12 +128,16 @@ export class WorkerManager {
 
     // Validate session ID format if present
     if (this.sessionId && !SESSION_ID_PATTERN.test(this.sessionId)) {
-      console.warn(
-        `[WorkerManager] Warning: CLAUDE_CODE_SESSION_ID has unexpected format: ${this.sessionId.substring(0, 12)}...`
+      console.error(
+        `[WorkerManager] CRITICAL: CLAUDE_CODE_SESSION_ID has an invalid format.`
       );
-      console.warn(
-        `[WorkerManager] Expected format: h<version>_<token> (e.g., h0_abc123)`
+      console.error(
+        `[WorkerManager] Received: "${this.sessionId.substring(0, 20)}...", Expected format: h<version>_<token>`
       );
+      console.error(
+        `[WorkerManager] Unsetting session ID to prevent worker authentication failures.`
+      );
+      this.sessionId = undefined;
     }
   }
 
@@ -691,9 +695,12 @@ echo 'WORKER_EXITED' >> ${shellQuote(logFile)}
           const lastLines = log.split("\n").slice(-lines).join("\n");
 
           // Check for authentication-specific errors
-          if (lastLines.includes("Credit balance is too low") ||
-              lastLines.includes("authentication") ||
-              lastLines.includes("Unauthorized")) {
+          const authPatterns = [
+            /credit balance is too low/i,
+            /authentication failed/i,
+            /\bunauthorized\b/i
+          ];
+          if (authPatterns.some(pat => pat.test(lastLines))) {
             return {
               status: "crashed",
               output: `Worker authentication failed.\n\n` +
