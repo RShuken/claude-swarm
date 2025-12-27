@@ -540,13 +540,16 @@ export async function startDashboardServer(
           }
         } catch (error: any) {
           // Stop interval on persistent errors to prevent infinite error loops
-          res.write(`event: error\ndata: ${JSON.stringify({
-            type: reviewType,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-          })}\n\n`);
+          // Guard against "write after end" race conditions
+          if (!res.writableEnded) {
+            res.write(`event: error\ndata: ${JSON.stringify({
+              type: reviewType,
+              error: error.message,
+              timestamp: new Date().toISOString(),
+            })}\n\n`);
+          }
           if (outputInterval) clearInterval(outputInterval);
-          res.end();
+          if (!res.writableEnded) res.end();
         }
       };
 
@@ -655,13 +658,16 @@ export async function startDashboardServer(
           }
         } catch (error: any) {
           // Stop interval on persistent errors to prevent infinite error loops
-          res.write(`event: error\ndata: ${JSON.stringify({
-            featureId,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-          })}\n\n`);
+          // Guard against "write after end" race conditions
+          if (!res.writableEnded) {
+            res.write(`event: error\ndata: ${JSON.stringify({
+              featureId,
+              error: error.message,
+              timestamp: new Date().toISOString(),
+            })}\n\n`);
+          }
           if (outputInterval) clearInterval(outputInterval);
-          res.end();
+          if (!res.writableEnded) res.end();
         }
       };
 
