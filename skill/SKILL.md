@@ -365,6 +365,118 @@ Moving to feature-2...
 [get_review_results to see findings]
 ```
 
+## Repo Setup
+
+Use the Repo Setup feature to configure new or existing repositories with development best practices. The swarm can set up CLAUDE.md files, CI/CD workflows, issue templates, and more—all in parallel with smart defaults based on your project type.
+
+### When to Use
+
+- **Fresh projects**: Initialize a new repo with complete development infrastructure
+- **Adding CI to existing projects**: Add GitHub Actions, Dependabot, or Release Please to a mature codebase
+- **Standardizing repos**: Apply consistent configuration across multiple repositories
+- **Upgrading configs**: Update outdated CI workflows or templates to current best practices
+
+### Quick Setup Workflow
+
+```
+User: "Set up this new TypeScript project with CI, issue templates, and release automation"
+
+[Analyze project: detect package.json, tsconfig.json, src/ structure]
+
+Me: I'll configure this repo with appropriate settings. Let me initialize the setup swarm.
+
+[Call orchestrator_init with features:
+1. Create CLAUDE.md with project-specific guidance
+2. Add GitHub Actions CI workflow for TypeScript
+3. Configure Dependabot for npm dependencies
+4. Add Release Please for automated releases
+5. Create issue templates (bug report, feature request)
+6. Add pull request template]
+
+Session initialized with 6 features.
+
+[start_parallel_workers for features 1-6]  # All independent, run in parallel
+Workers started for all configuration features...
+
+[Run: sleep 120]  # Wait 2 minutes
+
+[check_all_workers]
+All workers completed successfully.
+
+[run_verification: "npm run build && npm test"]
+Build and tests pass with new configuration!
+
+[commit_progress: "chore: add repo configuration and CI"]
+```
+
+### Configuration Types
+
+| Type | Description | Files Created |
+|------|-------------|---------------|
+| **CLAUDE.md** | Project guidance for Claude Code | `CLAUDE.md` |
+| **GitHub CI** | Build, test, lint workflows | `.github/workflows/ci.yml` |
+| **Release Please** | Automated version bumps and changelogs | `.github/workflows/release-please.yml`, `.release-please-manifest.json` |
+| **Dependabot** | Automated dependency updates | `.github/dependabot.yml` |
+| **Issue Templates** | Structured bug/feature reporting | `.github/ISSUE_TEMPLATE/*.yml` |
+| **PR Template** | Consistent pull request descriptions | `.github/PULL_REQUEST_TEMPLATE.md` |
+
+### Customization Options
+
+Control which configurations are applied using these options in your task description or worker prompts:
+
+**Skip specific configs** - Use `skipConfigs` to exclude certain configuration types:
+```
+"Set up CI and issue templates, but skip Release Please and Dependabot"
+→ skipConfigs: ["release-please", "dependabot"]
+```
+
+**Force overwrite** - Use `force: true` to replace existing configurations:
+```
+"Update all CI workflows to latest patterns, replacing existing ones"
+→ force: true (overwrites existing .github/workflows/)
+```
+
+**Merge mode (default)** - Without `force`, existing configs are preserved and merged:
+- Existing CLAUDE.md sections are kept, new guidance is appended
+- Workflow files are only created if they don't exist
+- Issue templates add to existing templates rather than replacing
+
+### Project Type Detection
+
+The setup swarm auto-detects your project type and applies appropriate defaults:
+
+| Detected | Configuration Applied |
+|----------|----------------------|
+| `package.json` | Node.js CI, npm Dependabot |
+| `tsconfig.json` | TypeScript build steps, type checking |
+| `pyproject.toml` | Python CI, pip/poetry Dependabot |
+| `Cargo.toml` | Rust CI, cargo Dependabot |
+| `go.mod` | Go CI, go modules Dependabot |
+| `.github/` exists | Merge mode by default, preserves existing |
+
+### Example: Adding CI to Existing Project
+
+```
+User: "Add GitHub Actions CI to this Python project, keep existing issue templates"
+
+[Detect: pyproject.toml, pytest in dependencies, existing .github/ISSUE_TEMPLATE/]
+
+Me: I'll add Python CI while preserving your existing templates.
+
+[Call orchestrator_init with features:
+1. Create GitHub Actions CI for Python with pytest
+2. Configure Dependabot for pip dependencies
+3. Update CLAUDE.md with CI information]
+
+[start_parallel_workers]
+...
+
+[Workers complete, merge with existing .github/ structure]
+[Existing issue templates preserved, new CI workflow added]
+
+[commit_progress: "ci: add GitHub Actions workflow for Python"]
+```
+
 ## Troubleshooting
 
 ### "No active session"
