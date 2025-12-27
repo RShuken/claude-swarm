@@ -450,7 +450,7 @@
         function createFeatureCard(feature) {
             const config = STATUS_CONFIG[feature.status] || STATUS_CONFIG.pending;
             const attempts = feature.attempts || 0;
-            const hasWorker = feature.workerSession ? true : false;
+            const hasWorker = feature.workerId ? true : false;  // Use workerId from API
 
             return `
                 <div class="bg-gray-50 dark:bg-claude-darker rounded-lg p-3 sm:p-4 border border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700 transition-colors ${config.pulse ? 'animate-pulse-slow' : ''}">
@@ -530,7 +530,8 @@
         // Update workers display
         function updateWorkers(features) {
             const container = document.getElementById('workers-container');
-            const activeWorkers = features ? features.filter(f => f.workerSession) : [];
+            // Check for workerId (the actual field from the API) - active workers have a workerId set
+            const activeWorkers = features ? features.filter(f => f.workerId && f.status === 'in_progress') : [];
 
             document.getElementById('worker-count').textContent = `${activeWorkers.length} workers`;
 
@@ -545,7 +546,7 @@
 
             container.innerHTML = activeWorkers.map(f => createWorkerCard({
                 featureId: f.id,
-                session: f.workerSession,
+                session: f.workerId,  // Use workerId which is the tmux session name
                 startedAt: f.startedAt || new Date().toISOString()
             })).join('');
         }
