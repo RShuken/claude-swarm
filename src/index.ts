@@ -5341,11 +5341,16 @@ server.tool(
       major: 3,
       critical: 4
     };
-    const minSeverityLevel = severityOrder[minSeverity] ?? 0;
+
+    // Normalize severity strings to handle case variations
+    const normalizeSeverity = (s: unknown): string =>
+      typeof s === "string" ? s.toLowerCase().trim() : "";
+
+    const minSeverityLevel = severityOrder[normalizeSeverity(minSeverity)] ?? 0;
 
     // Filter by severity
     const eligibleIssues = allIssues.filter(
-      (issue) => severityOrder[issue.severity as keyof typeof severityOrder] >= minSeverityLevel
+      (issue) => (severityOrder[normalizeSeverity(issue.severity)] ?? 0) >= minSeverityLevel
     );
 
     // If no indices provided and not auto-selecting, show available issues

@@ -1191,10 +1191,12 @@ The worker may not be running or the connection was lost.</pre>`;
             // Then process ANSI codes
             // Match ANSI escape sequences: ESC[...m
             result = result.replace(/\x1b\[([0-9;]*)m/g, (match, codes) => {
+                // Reset / clear all formatting
                 if (!codes || codes === '0') {
                     if (openSpans > 0) {
-                        openSpans--;
-                        return '</span>';
+                        const closing = '</span>'.repeat(openSpans);
+                        openSpans = 0;
+                        return closing;
                     }
                     return '';
                 }
@@ -1215,13 +1217,14 @@ The worker may not be running or the connection was lost.</pre>`;
                 }
 
                 if (styles.length > 0) {
+                    // Close all active spans before applying new style state
                     let replacement = '';
                     if (openSpans > 0) {
-                        replacement += '</span>';
-                        openSpans--;
+                        replacement += '</span>'.repeat(openSpans);
+                        openSpans = 0;
                     }
                     replacement += `<span style="${styles.join('; ')}">`;
-                    openSpans++;
+                    openSpans = 1;
                     return replacement;
                 }
                 return '';

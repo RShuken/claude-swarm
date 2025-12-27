@@ -504,6 +504,9 @@ export async function startDashboardServer(
       res.flushHeaders();
 
       // Send output using tmux capture-pane
+      // Declare interval variable before sendOutput to avoid TDZ issues
+      let outputInterval: NodeJS.Timeout | null = null;
+
       const sendOutput = async () => {
         try {
           const { execFile } = await import("child_process");
@@ -532,7 +535,7 @@ export async function startDashboardServer(
               message: "Review worker session ended or not found",
               timestamp: new Date().toISOString(),
             })}\n\n`);
-            clearInterval(outputInterval);
+            if (outputInterval) clearInterval(outputInterval);
             res.end();
           }
         } catch (error: any) {
@@ -546,7 +549,7 @@ export async function startDashboardServer(
 
       await sendOutput();
 
-      const outputInterval = setInterval(async () => {
+      outputInterval = setInterval(async () => {
         const currentState = getState();
         const currentWorker = currentState?.reviewWorkers?.find((rw) => rw.type === reviewType);
 
@@ -556,7 +559,7 @@ export async function startDashboardServer(
             message: "Review worker completed or stopped",
             timestamp: new Date().toISOString(),
           })}\n\n`);
-          clearInterval(outputInterval);
+          if (outputInterval) clearInterval(outputInterval);
           res.end();
           return;
         }
@@ -565,7 +568,7 @@ export async function startDashboardServer(
       }, 2000);
 
       req.on("close", () => {
-        clearInterval(outputInterval);
+        if (outputInterval) clearInterval(outputInterval);
       });
     })
   );
@@ -611,6 +614,9 @@ export async function startDashboardServer(
       res.flushHeaders();
 
       // Send initial output
+      // Declare interval variable before sendOutput to avoid TDZ issues
+      let outputInterval: NodeJS.Timeout | null = null;
+
       const sendOutput = async () => {
         try {
           // Get the worker output using tmux capture-pane (100 lines)
@@ -641,7 +647,7 @@ export async function startDashboardServer(
               message: "Worker session ended or not found",
               timestamp: new Date().toISOString(),
             })}\n\n`);
-            clearInterval(outputInterval);
+            if (outputInterval) clearInterval(outputInterval);
             res.end();
           }
         } catch (error: any) {
@@ -657,7 +663,7 @@ export async function startDashboardServer(
       await sendOutput();
 
       // Stream updates every 2 seconds
-      const outputInterval = setInterval(async () => {
+      outputInterval = setInterval(async () => {
         // Check if feature still has active worker
         const currentState = getState();
         const currentFeature = currentState?.features.find((f) => f.id === featureId);
@@ -668,7 +674,7 @@ export async function startDashboardServer(
             message: "Worker completed or stopped",
             timestamp: new Date().toISOString(),
           })}\n\n`);
-          clearInterval(outputInterval);
+          if (outputInterval) clearInterval(outputInterval);
           res.end();
           return;
         }
@@ -678,7 +684,7 @@ export async function startDashboardServer(
 
       // Handle client disconnect
       req.on("close", () => {
-        clearInterval(outputInterval);
+        if (outputInterval) clearInterval(outputInterval);
       });
     })
   );
