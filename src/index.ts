@@ -200,7 +200,7 @@ server.tool(
   },
   async ({ projectDir, format = "pretty" }) => {
     const { state, workers } = await ensureInitialized(projectDir);
-    const current = state.load();
+    let current = state.load();
 
     if (!current) {
       return {
@@ -211,6 +211,39 @@ server.tool(
           },
         ],
       };
+    }
+
+    // If session is in "reviewing" state, automatically check and update review status
+    let reviewStatusUpdated = false;
+    if (current.status === "reviewing" && current.reviewWorkers && current.reviewWorkers.length > 0) {
+      const reviewManager = new ReviewManager(projectDir);
+      const { allDone, reviewWorkers } = await reviewManager.checkReviewStatus(
+        current.reviewWorkers,
+        workers
+      );
+
+      // Update state with new review worker status
+      current.reviewWorkers = reviewWorkers;
+
+      // If all reviews are done, transition to completed
+      if (allDone) {
+        current.aggregatedReview = reviewManager.aggregateReviews(reviewWorkers);
+        const allFeaturesSucceeded = current.features.every(f => f.status === "completed");
+        current.status = allFeaturesSucceeded ? "completed" : "completed_with_failures";
+        current.completedAt = new Date().toISOString();
+
+        // Add review findings to progress log
+        const reviewLogs = reviewManager.formatReviewsForLog(current.aggregatedReview);
+        current.progressLog.push(...reviewLogs);
+        current.progressLog.push(`[${new Date().toISOString()}] 🏁 Orchestration completed with reviews.`);
+        reviewStatusUpdated = true;
+
+        state.save(current);
+        state.writeProgressFile();
+      } else {
+        // Just save the updated review worker statuses
+        state.save(current);
+      }
     }
 
     // Update worker statuses from tmux
@@ -255,6 +288,23 @@ server.tool(
     statusText += `  🔄 In Progress: ${inProgress.length}\n`;
     statusText += `  ⏳ Pending: ${pending.length}\n`;
     statusText += `  ❌ Failed: ${failed.length}\n\n`;
+
+    // Show review status if in reviewing state or reviews just completed
+    if (current.reviewWorkers && current.reviewWorkers.length > 0) {
+      statusText += `🔍 Review Status:\n`;
+      for (const rw of current.reviewWorkers) {
+        const statusIcon = rw.status === "completed" ? "✅" :
+          rw.status === "failed" ? "❌" : "🔄";
+        statusText += `  ${statusIcon} ${rw.type.toUpperCase()} Review: ${rw.status}\n`;
+        if (rw.findings) {
+          statusText += `     Severity: ${rw.findings.severity} (${rw.findings.issues.length} issues)\n`;
+        }
+      }
+      if (reviewStatusUpdated) {
+        statusText += `\n  🏁 Reviews completed! Use get_review_results for detailed findings.\n`;
+      }
+      statusText += `\n`;
+    }
 
     if (inProgress.length > 0) {
       statusText += `🔄 Currently Working On:\n`;
@@ -5198,6 +5248,229 @@ server.tool(
     response += `- **Skip on feature failure**: ${newConfig.skipOnFailure ? "Yes" : "No"}\n`;
     response += `- **Code review**: ${newConfig.codeReviewEnabled ? "Enabled" : "Disabled"}\n`;
     response += `- **Architecture review**: ${newConfig.architectureReviewEnabled ? "Enabled" : "Disabled"}\n`;
+
+    return {
+      content: [{ type: "text", text: response }],
+    };
+  }
+);
+
+// ============================================================================
+// TOOL: implement_review_suggestions
+// ============================================================================
+server.tool(
+  "implement_review_suggestions",
+  "Convert review findings into new features that can be worked on. This allows the orchestrator to act on code/architecture review suggestions by creating actionable tasks.",
+  {
+    projectDir: z.string().describe("Absolute path to the project directory"),
+    issueIndices: z.array(z.number()).optional()
+      .describe("Specific issue indices to implement (0-based). If not provided, shows available issues."),
+    minSeverity: z.enum(["info", "warning", "error"]).optional()
+      .describe("Minimum severity level to include (default: warning)"),
+    reviewType: z.enum(["code", "architecture", "both"]).optional()
+      .describe("Which review findings to use (default: both)"),
+    autoSelect: z.boolean().optional()
+      .describe("Auto-select all issues at or above minSeverity (default: false)"),
+  },
+  async ({ projectDir, issueIndices, minSeverity = "warning", reviewType = "both", autoSelect = false }) => {
+    const { state } = await ensureInitialized(projectDir);
+    const current = state.load();
+
+    if (!current) {
+      return {
+        content: [{ type: "text", text: "❌ No active orchestration session." }],
+      };
+    }
+
+    if (!current.aggregatedReview) {
+      return {
+        content: [{ type: "text", text: "❌ No review results available. Run reviews first." }],
+      };
+    }
+
+    const review = current.aggregatedReview;
+
+    // Collect all issues from relevant reviews
+    interface IndexedIssue {
+      index: number;
+      source: "code" | "architecture";
+      category: string;
+      severity: string;
+      file?: string;
+      line?: number;
+      message: string;
+      suggestion?: string;
+    }
+
+    const allIssues: IndexedIssue[] = [];
+    let idx = 0;
+
+    if ((reviewType === "code" || reviewType === "both") && review.codeReview?.issues) {
+      for (const issue of review.codeReview.issues) {
+        allIssues.push({
+          index: idx++,
+          source: "code",
+          ...issue,
+        });
+      }
+    }
+
+    if ((reviewType === "architecture" || reviewType === "both") && review.architectureReview?.issues) {
+      for (const issue of review.architectureReview.issues) {
+        allIssues.push({
+          index: idx++,
+          source: "architecture",
+          ...issue,
+        });
+      }
+    }
+
+    if (allIssues.length === 0) {
+      return {
+        content: [{ type: "text", text: "✅ No issues found in review results. Nothing to implement." }],
+      };
+    }
+
+    // Severity ordering for filtering
+    const severityOrder = { info: 0, warning: 1, error: 2 };
+    const minSeverityLevel = severityOrder[minSeverity];
+
+    // Filter by severity
+    const eligibleIssues = allIssues.filter(
+      (issue) => severityOrder[issue.severity as keyof typeof severityOrder] >= minSeverityLevel
+    );
+
+    // If no indices provided and not auto-selecting, show available issues
+    if (!issueIndices && !autoSelect) {
+      let response = `## Review Issues Available for Implementation\n\n`;
+      response += `Found ${allIssues.length} total issues, ${eligibleIssues.length} at ${minSeverity} or higher.\n\n`;
+
+      for (const issue of eligibleIssues) {
+        const icon = issue.severity === "error" ? "🔴" :
+          issue.severity === "warning" ? "🟡" : "🔵";
+        response += `**[${issue.index}]** ${icon} [${issue.source}/${issue.category}] ${issue.message}\n`;
+        if (issue.file) response += `   File: ${issue.file}${issue.line ? `:${issue.line}` : ""}\n`;
+        if (issue.suggestion) response += `   Fix: ${issue.suggestion}\n`;
+        response += "\n";
+      }
+
+      response += `---\n`;
+      response += `To implement specific issues, call again with:\n`;
+      response += `- \`issueIndices: [0, 1, 2]\` - specific issue indices\n`;
+      response += `- \`autoSelect: true\` - all issues at ${minSeverity}+ severity\n`;
+
+      return {
+        content: [{ type: "text", text: response }],
+      };
+    }
+
+    // Validate and filter issueIndices
+    let invalidIndices: number[] = [];
+    if (issueIndices) {
+      const validIndices = new Set(allIssues.map(i => i.index));
+      invalidIndices = issueIndices.filter(idx => !validIndices.has(idx));
+    }
+
+    // Determine which issues to implement
+    const issuesToImplement: IndexedIssue[] = autoSelect
+      ? eligibleIssues
+      : allIssues.filter((issue) => issueIndices?.includes(issue.index));
+
+    if (issuesToImplement.length === 0) {
+      let errorMsg = "❌ No valid issues selected.";
+      if (invalidIndices.length > 0) {
+        errorMsg += ` Invalid indices: ${invalidIndices.join(", ")}.`;
+      }
+      errorMsg += " Check the indices or severity filter.";
+      return {
+        content: [{ type: "text", text: errorMsg }],
+      };
+    }
+
+    // Group issues by file or category for efficient features
+    const featureGroups = new Map<string, IndexedIssue[]>();
+    for (const issue of issuesToImplement) {
+      const key = issue.file || `${issue.source}-${issue.category}`;
+      if (!featureGroups.has(key)) {
+        featureGroups.set(key, []);
+      }
+      featureGroups.get(key)!.push(issue);
+    }
+
+    // Create features for each group
+    const newFeatures: Feature[] = [];
+    const existingFeatureCount = current.features.length;
+
+    for (const [key, issues] of featureGroups) {
+      const featureId = `fix-${existingFeatureCount + newFeatures.length + 1}`;
+
+      // Build description from issues
+      let description: string;
+      if (issues.length === 1) {
+        const issue = issues[0];
+        description = issue.suggestion || issue.message;
+        if (issue.file) {
+          description = `[${issue.file}] ${description}`;
+        }
+      } else {
+        const fileOrCategory = issues[0].file || `${issues[0].source} ${issues[0].category}`;
+        description = `Fix ${issues.length} ${issues[0].severity}+ issues in ${fileOrCategory}`;
+      }
+
+      // Truncate if too long
+      if (description.length > 200) {
+        description = description.substring(0, 197) + "...";
+      }
+
+      const feature: Feature = {
+        id: featureId,
+        description,
+        status: "pending",
+        attempts: 0,
+        context: {
+          documentation: [],
+          prepared: [{
+            key: "review-issues",
+            content: JSON.stringify(issues, null, 2),
+            priority: "required",
+            source: "review-findings",
+          }],
+        },
+      };
+
+      newFeatures.push(feature);
+    }
+
+    // Add features to state
+    current.features.push(...newFeatures);
+
+    // Reset session status to in_progress if it was completed
+    if (current.status === "completed" || current.status === "completed_with_failures" || current.status === "reviewing") {
+      current.status = "in_progress";
+      current.completedAt = undefined;
+    }
+
+    // Log the action
+    const timestamp = new Date().toISOString();
+    current.progressLog.push(
+      `[${timestamp}] 🔧 Created ${newFeatures.length} feature(s) from review findings`
+    );
+    for (const f of newFeatures) {
+      current.progressLog.push(`[${timestamp}]   - ${f.id}: ${f.description}`);
+    }
+
+    state.save(current);
+    state.writeProgressFile();
+
+    let response = `## Features Created from Review Findings\n\n`;
+    response += `Created ${newFeatures.length} new feature(s) from ${issuesToImplement.length} issue(s):\n\n`;
+
+    for (const f of newFeatures) {
+      response += `- **${f.id}**: ${f.description}\n`;
+    }
+
+    response += `\nSession status: ${current.status}\n`;
+    response += `\nUse \`start_worker\` or \`start_parallel_workers\` to begin implementing these fixes.`;
 
     return {
       content: [{ type: "text", text: response }],

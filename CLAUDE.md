@@ -28,7 +28,7 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 
 ### Core Components
 
-**src/index.ts** - MCP server entry point registering 50+ tools. All tool handlers are defined inline. Tool schemas use Zod for validation. The file is structured by tool category: core orchestration, worker management, competitive planning, confidence monitoring, feature management, session control, post-completion reviews, protocol management, and protocol networking.
+**src/index.ts** - MCP server entry point registering 55+ tools. All tool handlers are defined inline. Tool schemas use Zod for validation. The file is structured by tool category: core orchestration, worker management, competitive planning, confidence monitoring, feature management, session control, post-completion reviews, protocol management, protocol networking, context management, and repository setup.
 
 **src/state/manager.ts** - Persistent state management using the "notebook pattern". Stores session state in `.claude/orchestrator/state.json` with atomic writes (temp file + rename). Also generates `claude-progress.txt` for human readability and `init.sh` for environment setup. Manages feature context (`FeatureContext`), routing config, and protocol bindings per feature.
 
@@ -38,7 +38,7 @@ This is an MCP (Model Context Protocol) server that orchestrates parallel Claude
 
 **src/workers/enforcement-integration.ts** - Hooks protocol enforcement into the worker lifecycle. Validates constraints before worker spawns and monitors during execution.
 
-**src/workers/review-manager.ts** - Orchestrates post-completion code and architecture reviews. Parses worker logs to identify modified files, builds review prompts with session context, and aggregates findings into structured JSON. Review workers have read-only tool access (no Bash).
+**src/workers/review-manager.ts** - Orchestrates post-completion code and architecture reviews. Parses worker logs to identify modified files, builds review prompts with session context, and aggregates findings into structured JSON. Review workers have read-only tool access (no Bash). Notifies orchestrator when reviews complete via status file updates.
 
 ### Protocol Governance System
 
@@ -54,7 +54,7 @@ The protocol system enables behavioral constraints on workers. Located in `src/p
 
 **base-constraints.ts** - Immutable security boundaries (frozen at runtime). Defines prohibited tools (rm -rf, sudo, etc.), prohibited paths (/etc, ~/.ssh, etc.), and maximum privilege ceiling. LLM-generated protocols cannot override these.
 
-**proposal-manager.ts** - Manages LLM-generated protocol proposals. Validates against base constraints, calculates risk scores, and tracks approval workflow (pending → reviewing → approved/rejected).
+**proposal-manager.ts** - Manages LLM-generated protocol proposals. Validates against base constraints, calculates risk scores, and tracks approval workflow (pending -> reviewing -> approved/rejected).
 
 **proposal-validator.ts** - Deep validation of protocol proposals including constraint rule verification and risk scoring algorithm.
 
@@ -64,9 +64,34 @@ The protocol system enables behavioral constraints on workers. Located in `src/p
 
 **network/** - Protocol distribution across MCP instances. `distributor.ts` handles bundle export/import with optional signing. `sync.ts` enables push/pull/bidirectional synchronization.
 
-### Additional Components
+### Repository Setup System
 
-**src/dashboard/server.ts** - Express 5 HTTP server with REST API and SSE endpoints for real-time monitoring. Dashboard UI served from `src/dashboard/public/`.
+Located in `src/setup/`:
+
+**manager.ts** - Orchestrates repository configuration with platform detection (GitHub, GitLab, Gitea, Bitbucket, Azure DevOps). Analyzes project structure to detect languages, frameworks, and package managers. Generates setup features for missing configurations and builds prompts for worker execution.
+
+**generator.ts** - Template generators for repository configuration files:
+- `generateClaudeMd()` - Project-specific CLAUDE.md
+- `generateCIWorkflow()` - GitHub Actions CI for detected languages
+- `generateDependabot()` - Dependency update configuration
+- `generateReleasePlease()` - Automated release workflow
+- `generateIssueTemplates()` - Bug report and feature request forms
+- `generatePRTemplate()` - Pull request description template
+- `generateContributing()` - CONTRIBUTING.md with project-specific guidance
+- `generateSecurity()` - SECURITY.md with vulnerability reporting policy
+
+### Dashboard System
+
+**src/dashboard/server.ts** - Express 5 HTTP server with REST API and SSE (Server-Sent Events) endpoints. Provides real-time updates for session status, worker progress, and terminal output.
+
+**src/dashboard/public/** - Static dashboard UI with:
+- Live terminal streaming with ANSI to HTML color conversion
+- Review worker visibility (code-review, architecture-review)
+- Feature cards with status, dependencies, and worker assignment
+- Session overview with progress bar and statistics
+- Dark mode support with system preference detection
+
+### Additional Components
 
 **src/context/enricher.ts** - Auto-enriches features with relevant documentation (CLAUDE.md, README) and related code files. Configurable context limits prevent prompt bloat (default: 16KB max total, 4KB per doc, 2KB per code file). Includes 60-second cache TTL for frequently accessed context.
 
@@ -89,6 +114,7 @@ The protocol system enables behavioral constraints on workers. Located in `src/p
 5. **File-Based Prompt Passing** - Worker prompts written to `.prompt` files, not shell strings
 6. **Fail-Closed Enforcement** - Unknown constraint types block by default in protocol validation
 7. **Immutable Base Constraints** - Security boundaries frozen at module load, cannot be overridden
+8. **SSE for Real-time Updates** - Dashboard uses Server-Sent Events for live worker monitoring
 
 ### State Files Created Per Project
 
@@ -150,6 +176,9 @@ tmux capture-pane -t <session-name> -p -S -100
 
 # Debug MCP protocol with inspector
 npm run inspector
+
+# View dashboard (when MCP server is running)
+open http://localhost:3456
 ```
 
 ## Adding New Tools
@@ -160,3 +189,13 @@ When adding a new MCP tool to `src/index.ts`:
 3. Use `ensureInitialized(projectDir)` to get managers
 4. Use security utilities from `src/utils/security.ts` for input validation
 5. Follow existing patterns for error handling and response formatting
+6. Update README.md tool reference table
+
+## Adding New Setup Configurations
+
+When adding a new repository configuration type:
+1. Add generator function in `src/setup/generator.ts`
+2. Add feature definition in `src/setup/manager.ts` `generateSetupFeatures()`
+3. Add prompt builder method in `src/setup/manager.ts`
+4. Add switch case in `generatePromptForFeature()`
+5. Update `GeneratedFiles` type if adding a new file category

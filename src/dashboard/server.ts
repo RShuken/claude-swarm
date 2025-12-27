@@ -14,7 +14,7 @@ import express, { Request, Response, NextFunction } from "express";
 import * as http from "http";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { StateManager, OrchestratorState, Feature, WorkerStatus } from "../state/manager.js";
+import { StateManager, OrchestratorState, Feature, WorkerStatus, ReviewWorker } from "../state/manager.js";
 import { WorkerManager } from "../workers/manager.js";
 
 // ES module __dirname equivalent
@@ -46,6 +46,8 @@ interface StateSnapshot {
   features: Map<string, string>; // featureId -> status
   logCount: number;
   workerCount: number;
+  reviewWorkerCount: number;
+  reviewWorkerStatuses: Map<string, string>; // type -> status
 }
 
 /**
@@ -88,6 +90,8 @@ export async function startDashboardServer(
         features: new Map(),
         logCount: 0,
         workerCount: 0,
+        reviewWorkerCount: 0,
+        reviewWorkerStatuses: new Map(),
       };
     }
 
@@ -100,11 +104,20 @@ export async function startDashboardServer(
       }
     }
 
+    // Track review workers
+    const reviewWorkerStatuses = new Map<string, string>();
+    const reviewWorkers = state.reviewWorkers || [];
+    for (const rw of reviewWorkers) {
+      reviewWorkerStatuses.set(rw.type, rw.status);
+    }
+
     return {
       status: state.status,
       features,
       logCount: state.progressLog.length,
       workerCount,
+      reviewWorkerCount: reviewWorkers.filter(r => r.status === "running").length,
+      reviewWorkerStatuses,
     };
   };
 
@@ -166,6 +179,26 @@ export async function startDashboardServer(
       broadcastSSE("worker", {
         activeCount: newSnap.workerCount,
       });
+    }
+
+    // Review worker updates
+    if (state && state.reviewWorkers) {
+      for (const rw of state.reviewWorkers) {
+        const oldStatus = oldSnap?.reviewWorkerStatuses.get(rw.type);
+        const newStatus = newSnap.reviewWorkerStatuses.get(rw.type);
+        if (!oldSnap || oldStatus !== newStatus) {
+          broadcastSSE("reviewWorker", {
+            type: rw.type,
+            workerId: rw.workerId,
+            sessionName: rw.sessionName,
+            status: rw.status,
+            startedAt: rw.startedAt,
+            completedAt: rw.completedAt,
+            findingsSeverity: rw.findings?.severity,
+            findingsIssueCount: rw.findings?.issues?.length || 0,
+          });
+        }
+      }
     }
   };
 
@@ -383,6 +416,161 @@ export async function startDashboardServer(
   );
 
   // ============================================================================
+  // GET /api/review-workers - Review worker statuses
+  // ============================================================================
+  app.get(
+    "/api/review-workers",
+    asyncHandler(async (req: Request, res: Response) => {
+      const state = getState();
+
+      if (!state) {
+        sendJson(res, {
+          reviewWorkers: [],
+          message: "No active orchestration session",
+        });
+        return;
+      }
+
+      const reviewWorkers = state.reviewWorkers || [];
+
+      const workerData = reviewWorkers.map((rw) => ({
+        type: rw.type,
+        workerId: rw.workerId,
+        sessionName: rw.sessionName,
+        status: rw.status,
+        startedAt: rw.startedAt,
+        completedAt: rw.completedAt,
+        findingsSeverity: rw.findings?.severity,
+        findingsIssueCount: rw.findings?.issues?.length || 0,
+        findingsSummary: rw.findings?.summary,
+      }));
+
+      // Summary counts
+      const running = workerData.filter((w) => w.status === "running").length;
+      const completed = workerData.filter((w) => w.status === "completed").length;
+      const failed = workerData.filter((w) => w.status === "failed").length;
+
+      sendJson(res, {
+        reviewWorkers: workerData,
+        summary: {
+          total: workerData.length,
+          running,
+          completed,
+          failed,
+        },
+      });
+    })
+  );
+
+  // ============================================================================
+  // GET /api/review-workers/:type/output - Stream review worker terminal output via SSE
+  // ============================================================================
+  app.get(
+    "/api/review-workers/:type/output",
+    asyncHandler(async (req: Request, res: Response) => {
+      const reviewType = req.params.type;
+      const state = getState();
+
+      if (!state) {
+        res.status(404).json({
+          error: "No active orchestration session",
+        });
+        return;
+      }
+
+      // Find the review worker
+      const reviewWorkers = state.reviewWorkers || [];
+      const reviewWorker = reviewWorkers.find((rw) => rw.type === reviewType);
+
+      if (!reviewWorker) {
+        res.status(404).json({
+          error: `Review worker not found: ${reviewType}`,
+        });
+        return;
+      }
+
+      if (!reviewWorker.sessionName) {
+        res.status(404).json({
+          error: `No active session for review worker: ${reviewType}`,
+        });
+        return;
+      }
+
+      // Set SSE headers
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders();
+
+      // Send output using tmux capture-pane
+      const sendOutput = async () => {
+        try {
+          const { execFile } = await import("child_process");
+          const { promisify } = await import("util");
+          const execFileAsync = promisify(execFile);
+
+          try {
+            const { stdout } = await execFileAsync("tmux", [
+              "capture-pane",
+              "-t",
+              reviewWorker.sessionName!,
+              "-p",
+              "-e", // Include escape sequences for colors
+              "-S",
+              "-200", // Last 200 lines for review workers (they write more)
+            ]);
+
+            res.write(`event: output\ndata: ${JSON.stringify({
+              type: reviewType,
+              output: stdout,
+              timestamp: new Date().toISOString(),
+            })}\n\n`);
+          } catch (tmuxError: any) {
+            res.write(`event: ended\ndata: ${JSON.stringify({
+              type: reviewType,
+              message: "Review worker session ended or not found",
+              timestamp: new Date().toISOString(),
+            })}\n\n`);
+            clearInterval(outputInterval);
+            res.end();
+          }
+        } catch (error: any) {
+          res.write(`event: error\ndata: ${JSON.stringify({
+            type: reviewType,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+          })}\n\n`);
+        }
+      };
+
+      await sendOutput();
+
+      const outputInterval = setInterval(async () => {
+        const currentState = getState();
+        const currentWorker = currentState?.reviewWorkers?.find((rw) => rw.type === reviewType);
+
+        if (!currentWorker || currentWorker.status !== "running") {
+          res.write(`event: ended\ndata: ${JSON.stringify({
+            type: reviewType,
+            message: "Review worker completed or stopped",
+            timestamp: new Date().toISOString(),
+          })}\n\n`);
+          clearInterval(outputInterval);
+          res.end();
+          return;
+        }
+
+        await sendOutput();
+      }, 2000);
+
+      req.on("close", () => {
+        clearInterval(outputInterval);
+      });
+    })
+  );
+
+  // ============================================================================
   // GET /api/workers/:featureId/output - Stream worker terminal output via SSE
   // ============================================================================
   app.get(
@@ -436,8 +624,9 @@ export async function startDashboardServer(
               "-t",
               feature.workerId!,
               "-p",
+              "-e", // Include escape sequences for colors
               "-S",
-              "-100", // Last 100 lines
+              "-200", // Last 200 lines
             ]);
 
             res.write(`event: output\ndata: ${JSON.stringify({
@@ -671,6 +860,21 @@ export async function startDashboardServer(
         })}\n\n`);
       }
 
+      // Send all review workers
+      const reviewWorkers = state.reviewWorkers || [];
+      for (const rw of reviewWorkers) {
+        res.write(`event: reviewWorker\ndata: ${JSON.stringify({
+          type: rw.type,
+          workerId: rw.workerId,
+          sessionName: rw.sessionName,
+          status: rw.status,
+          startedAt: rw.startedAt,
+          completedAt: rw.completedAt,
+          findingsSeverity: rw.findings?.severity,
+          findingsIssueCount: rw.findings?.issues?.length || 0,
+        })}\n\n`);
+      }
+
       // Initialize snapshot with current state
       lastSnapshot = createSnapshot(state);
     }
@@ -733,6 +937,8 @@ export async function startDashboardServer(
         "GET /api/features?status=pending|in_progress|completed|failed",
         "GET /api/workers",
         "GET /api/workers/:featureId/output (SSE)",
+        "GET /api/review-workers",
+        "GET /api/review-workers/:type/output (SSE)",
         "GET /api/logs",
         "GET /api/logs?limit=N",
         "GET /api/stats",

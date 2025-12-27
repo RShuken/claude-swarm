@@ -219,6 +219,31 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- Review Workers Section -->
+                <section class="bg-white dark:bg-transparent rounded-xl sm:bg-transparent sm:dark:bg-transparent" id="review-workers-section" style="display: none;">
+                    <button onclick="toggleSection('review-workers')" class="w-full flex items-center justify-between p-3 sm:p-0 sm:mb-4 min-h-[44px] sm:min-h-0 sm:cursor-default">
+                        <h2 class="text-lg sm:text-xl font-semibold flex items-center gap-2 text-gray-900 dark:text-white">
+                            <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Review Workers
+                        </h2>
+                        <div class="flex items-center gap-2">
+                            <span id="review-worker-count" class="text-xs sm:text-sm text-gray-500 dark:text-gray-400">0 reviewers</span>
+                            <svg class="w-5 h-5 text-gray-400 sm:hidden section-chevron" id="review-workers-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                    </button>
+                    <div id="review-workers-content" class="section-content px-3 pb-3 sm:px-0 sm:pb-0" style="max-height: 1000px;">
+                        <div id="review-workers-container" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div class="bg-gray-50 dark:bg-claude-darker rounded-lg p-4 text-center text-gray-500 border border-gray-200 dark:border-gray-800 col-span-full">
+                                <p class="text-gray-600 dark:text-gray-400">No review workers</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <!-- Right Column (1/3 width) -->
@@ -358,6 +383,7 @@
         let sessionStartTime = null;
         let eventSource = null;
         let features = new Map(); // Track features by ID for SSE updates
+        let reviewWorkers = new Map(); // Track review workers by type for SSE updates
         let logs = []; // Track logs for SSE updates
         let useSSE = true; // Whether to use SSE (fallback to polling if unavailable)
 
@@ -551,6 +577,96 @@
             })).join('');
         }
 
+        // Create review worker card HTML
+        function createReviewWorkerCard(worker) {
+            const isRunning = worker.status === 'running';
+            const isCompleted = worker.status === 'completed';
+            const isFailed = worker.status === 'failed';
+
+            const bgClass = isRunning ? 'bg-purple-50 dark:bg-purple-900/30' :
+                           isCompleted ? 'bg-green-50 dark:bg-green-900/30' :
+                           isFailed ? 'bg-red-50 dark:bg-red-900/30' :
+                           'bg-gray-50 dark:bg-claude-darker';
+
+            const borderClass = isRunning ? 'border-purple-200 dark:border-purple-800' :
+                               isCompleted ? 'border-green-200 dark:border-green-800' :
+                               isFailed ? 'border-red-200 dark:border-red-800' :
+                               'border-gray-200 dark:border-gray-800';
+
+            const dotClass = isRunning ? 'bg-purple-500 dark:bg-purple-400 animate-pulse' :
+                            isCompleted ? 'bg-green-500 dark:bg-green-400' :
+                            isFailed ? 'bg-red-500 dark:bg-red-400' :
+                            'bg-gray-500 dark:bg-gray-400';
+
+            const textClass = isRunning ? 'text-purple-700 dark:text-purple-300' :
+                             isCompleted ? 'text-green-700 dark:text-green-300' :
+                             isFailed ? 'text-red-700 dark:text-red-300' :
+                             'text-gray-700 dark:text-gray-300';
+
+            const typeLabel = worker.type === 'code' ? 'Code Review' : 'Architecture Review';
+            const statusLabel = isRunning ? 'Running' : isCompleted ? 'Completed' : isFailed ? 'Failed' : worker.status;
+
+            let findingsInfo = '';
+            if (worker.findingsSeverity) {
+                const severityColors = {
+                    clean: 'text-green-600 dark:text-green-400',
+                    minor: 'text-blue-600 dark:text-blue-400',
+                    moderate: 'text-yellow-600 dark:text-yellow-400',
+                    major: 'text-orange-600 dark:text-orange-400',
+                    critical: 'text-red-600 dark:text-red-400'
+                };
+                const severityClass = severityColors[worker.findingsSeverity] || 'text-gray-600 dark:text-gray-400';
+                findingsInfo = `<p class="text-xs mt-1 ${severityClass}">Severity: ${worker.findingsSeverity} (${worker.findingsIssueCount || 0} issues)</p>`;
+            }
+
+            return `
+                <div class="${bgClass} rounded-lg p-3 sm:p-4 border ${borderClass}">
+                    <div class="flex items-center justify-between mb-2 gap-2">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <div class="w-2 h-2 rounded-full ${dotClass} flex-shrink-0"></div>
+                            <span class="font-medium text-sm ${textClass}">${typeLabel}</span>
+                        </div>
+                        ${isRunning ? `
+                            <button
+                                onclick="openReviewOutputModal('${worker.type}')"
+                                class="px-2.5 py-1.5 bg-purple-600 dark:bg-purple-700 hover:bg-purple-700 dark:hover:bg-purple-600 rounded text-xs text-white flex items-center gap-1 transition-colors min-h-[32px] flex-shrink-0"
+                                title="View terminal output"
+                            >
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                </svg>
+                                <span class="hidden sm:inline">View Output</span>
+                            </button>
+                        ` : `
+                            <span class="px-2 py-1 ${isCompleted ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'} rounded text-xs">${statusLabel}</span>
+                        `}
+                    </div>
+                    <p class="text-xs text-gray-600 dark:text-gray-400">Session: ${worker.sessionName || 'N/A'}</p>
+                    ${worker.startedAt ? `<p class="text-xs text-gray-500 mt-1">Started: ${formatTimestamp(worker.startedAt)}</p>` : ''}
+                    ${worker.completedAt ? `<p class="text-xs text-gray-500 mt-1">Completed: ${formatTimestamp(worker.completedAt)}</p>` : ''}
+                    ${findingsInfo}
+                </div>
+            `;
+        }
+
+        // Update review workers display
+        function updateReviewWorkers(reviewWorkersData) {
+            const section = document.getElementById('review-workers-section');
+            const container = document.getElementById('review-workers-container');
+            const countEl = document.getElementById('review-worker-count');
+
+            if (!reviewWorkersData || reviewWorkersData.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            const runningCount = reviewWorkersData.filter(r => r.status === 'running').length;
+            countEl.textContent = `${reviewWorkersData.length} reviewer${reviewWorkersData.length !== 1 ? 's' : ''}${runningCount > 0 ? ` (${runningCount} active)` : ''}`;
+
+            container.innerHTML = reviewWorkersData.map(createReviewWorkerCard).join('');
+        }
+
         // Update statistics display
         function updateStats(stats) {
             if (!stats) {
@@ -622,11 +738,12 @@
         // Fetch all data from API
         async function fetchData() {
             try {
-                const [statusRes, featuresRes, statsRes, logsRes] = await Promise.all([
+                const [statusRes, featuresRes, statsRes, logsRes, reviewWorkersRes] = await Promise.all([
                     fetch(`${API_BASE}/status`).catch(() => null),
                     fetch(`${API_BASE}/features`).catch(() => null),
                     fetch(`${API_BASE}/stats`).catch(() => null),
-                    fetch(`${API_BASE}/logs`).catch(() => null)
+                    fetch(`${API_BASE}/logs`).catch(() => null),
+                    fetch(`${API_BASE}/review-workers`).catch(() => null)
                 ]);
 
                 // Handle status response
@@ -685,6 +802,20 @@
                     })) : [];
 
                     updateLog(logs);
+                }
+
+                // Handle review workers response
+                if (reviewWorkersRes && reviewWorkersRes.ok) {
+                    const reviewWorkersData = await reviewWorkersRes.json();
+                    const reviewWorkerList = reviewWorkersData.reviewWorkers || [];
+
+                    // Update review workers map for SSE sync
+                    reviewWorkers.clear();
+                    for (const rw of reviewWorkerList) {
+                        reviewWorkers.set(rw.type, rw);
+                    }
+
+                    updateReviewWorkers(reviewWorkerList);
                 }
 
                 document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
@@ -850,6 +981,20 @@
                 document.getElementById('refresh-status').textContent = 'Live (SSE)';
                 document.getElementById('refresh-status').className = 'text-green-500 dark:text-green-400';
             });
+
+            // Handle review worker updates
+            eventSource.addEventListener('reviewWorker', (e) => {
+                const data = JSON.parse(e.data);
+                console.log('SSE review worker update:', data.type, data.status);
+
+                // Update review workers map
+                reviewWorkers.set(data.type, data);
+
+                // Re-render review workers section
+                const reviewWorkersArray = Array.from(reviewWorkers.values());
+                updateReviewWorkers(reviewWorkersArray);
+                document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+            });
         }
 
         // Extract log type from message for styling
@@ -916,11 +1061,13 @@
             const modal = document.getElementById('output-modal');
             modal.classList.add('hidden');
 
-            // Close SSE connection
+            // Close SSE connection (both regular and review)
             disconnectOutputSSE();
+            disconnectReviewOutputSSE();
 
             // Reset state
             currentOutputFeatureId = null;
+            currentReviewType = null;
 
             // Restore body scroll
             document.body.style.overflow = '';
@@ -953,9 +1100,9 @@
                 const data = JSON.parse(e.data);
                 const terminalOutput = document.getElementById('terminal-output');
 
-                // Escape HTML and display output
-                const escapedOutput = escapeHtml(data.output || '');
-                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${escapedOutput}</pre>`;
+                // Convert ANSI codes to HTML with colors
+                const formattedOutput = ansiToHtml(data.output || '');
+                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${formattedOutput}</pre>`;
 
                 // Auto-scroll to bottom
                 terminalOutput.scrollTop = terminalOutput.scrollHeight;
@@ -968,9 +1115,9 @@
                 const data = JSON.parse(e.data);
                 const terminalOutput = document.getElementById('terminal-output');
 
-                // Add ended message
-                const currentContent = terminalOutput.querySelector('pre')?.textContent || '';
-                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${escapeHtml(currentContent)}</pre>
+                // Add ended message (preserve existing formatted content)
+                const currentContent = terminalOutput.querySelector('pre')?.innerHTML || '';
+                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${currentContent}</pre>
                     <div class="mt-4 pt-4 border-t border-gray-700 text-yellow-400">
                         Worker session ended: ${escapeHtml(data.message || 'Session closed')}
                     </div>`;
@@ -1011,6 +1158,161 @@ The worker may not be running or the connection was lost.</pre>`;
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Convert ANSI escape codes to HTML with styling
+        function ansiToHtml(text) {
+            if (!text) return '';
+
+            // ANSI color code mappings
+            const ansiColors = {
+                '30': 'color: #4a4a4a',    // Black
+                '31': 'color: #ef4444',    // Red
+                '32': 'color: #22c55e',    // Green
+                '33': 'color: #eab308',    // Yellow
+                '34': 'color: #3b82f6',    // Blue
+                '35': 'color: #a855f7',    // Magenta
+                '36': 'color: #06b6d4',    // Cyan
+                '37': 'color: #e5e7eb',    // White
+                '90': 'color: #6b7280',    // Bright Black (Gray)
+                '91': 'color: #f87171',    // Bright Red
+                '92': 'color: #4ade80',    // Bright Green
+                '93': 'color: #facc15',    // Bright Yellow
+                '94': 'color: #60a5fa',    // Bright Blue
+                '95': 'color: #c084fc',    // Bright Magenta
+                '96': 'color: #22d3ee',    // Bright Cyan
+                '97': 'color: #f9fafb',    // Bright White
+            };
+
+            // First escape HTML to prevent XSS
+            let result = escapeHtml(text);
+
+            // Then process ANSI codes
+            // Match ANSI escape sequences: ESC[...m
+            result = result.replace(/\x1b\[([0-9;]*)m/g, (match, codes) => {
+                if (!codes || codes === '0') {
+                    return '</span>';
+                }
+
+                const codeArray = codes.split(';');
+                const styles = [];
+
+                for (const code of codeArray) {
+                    if (code === '1') {
+                        styles.push('font-weight: bold');
+                    } else if (code === '3') {
+                        styles.push('font-style: italic');
+                    } else if (code === '4') {
+                        styles.push('text-decoration: underline');
+                    } else if (ansiColors[code]) {
+                        styles.push(ansiColors[code]);
+                    }
+                }
+
+                if (styles.length > 0) {
+                    return `<span style="${styles.join('; ')}">`;
+                }
+                return '';
+            });
+
+            return result;
+        }
+
+        // ========================================
+        // Review Worker Output Modal Functions
+        // ========================================
+        let reviewOutputEventSource = null;
+        let currentReviewType = null;
+
+        // Open the review output modal and start streaming
+        function openReviewOutputModal(reviewType) {
+            currentReviewType = reviewType;
+            currentOutputFeatureId = null; // Clear regular worker tracking
+
+            // Show modal
+            const modal = document.getElementById('output-modal');
+            modal.classList.remove('hidden');
+
+            // Update modal header
+            const typeLabel = reviewType === 'code' ? 'Code Review' : 'Architecture Review';
+            document.getElementById('modal-feature-id').textContent = typeLabel;
+
+            // Reset terminal output
+            const terminalOutput = document.getElementById('terminal-output');
+            terminalOutput.innerHTML = '<pre class="terminal-output text-purple-400">Connecting to review worker...</pre>';
+
+            // Reset status
+            updateModalStatus('streaming');
+
+            // Start SSE connection for review worker
+            connectReviewOutputSSE(reviewType);
+
+            // Prevent body scroll
+            document.body.style.overflow = 'hidden';
+        }
+
+        // Connect to review worker output SSE
+        function connectReviewOutputSSE(reviewType) {
+            if (reviewOutputEventSource) {
+                reviewOutputEventSource.close();
+            }
+
+            reviewOutputEventSource = new EventSource(`${API_BASE}/review-workers/${reviewType}/output`);
+
+            reviewOutputEventSource.addEventListener('output', (e) => {
+                const data = JSON.parse(e.data);
+                const terminalOutput = document.getElementById('terminal-output');
+
+                // Convert ANSI codes to HTML with colors
+                const formattedOutput = ansiToHtml(data.output || '');
+                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${formattedOutput}</pre>`;
+
+                // Auto-scroll to bottom
+                terminalOutput.scrollTop = terminalOutput.scrollHeight;
+
+                // Update last update time
+                document.getElementById('modal-last-update').textContent = formatTimestamp(data.timestamp);
+            });
+
+            reviewOutputEventSource.addEventListener('ended', (e) => {
+                const data = JSON.parse(e.data);
+                const terminalOutput = document.getElementById('terminal-output');
+
+                // Add ended message
+                const currentContent = terminalOutput.querySelector('pre')?.innerHTML || '';
+                terminalOutput.innerHTML = `<pre class="terminal-output text-green-400">${currentContent}</pre>
+                    <div class="mt-4 pt-4 border-t border-gray-700 text-yellow-400">
+                        Review worker session ended: ${escapeHtml(data.message || 'Session closed')}
+                    </div>`;
+
+                updateModalStatus('ended');
+
+                // Clean up SSE connection
+                disconnectReviewOutputSSE();
+            });
+
+            reviewOutputEventSource.addEventListener('error', (e) => {
+                console.error('Review worker output SSE error:', e);
+                updateModalStatus('error');
+
+                const terminalOutput = document.getElementById('terminal-output');
+                terminalOutput.innerHTML = `<pre class="terminal-output text-red-400">Error connecting to review worker output stream.
+The review worker may not be running or the connection was lost.</pre>`;
+            });
+
+            reviewOutputEventSource.onerror = () => {
+                if (reviewOutputEventSource.readyState === EventSource.CLOSED) {
+                    updateModalStatus('ended');
+                }
+            };
+        }
+
+        // Disconnect review worker output SSE
+        function disconnectReviewOutputSSE() {
+            if (reviewOutputEventSource) {
+                reviewOutputEventSource.close();
+                reviewOutputEventSource = null;
+            }
         }
 
         // ========================================
@@ -1084,7 +1386,7 @@ The worker may not be running or the connection was lost.</pre>`;
 
         // Handle ESC key to close modal
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && currentOutputFeatureId) {
+            if (e.key === 'Escape' && (currentOutputFeatureId || currentReviewType)) {
                 closeOutputModal();
             }
         });

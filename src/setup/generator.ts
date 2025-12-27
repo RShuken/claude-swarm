@@ -532,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${rustEdition}
           components: clippy, rustfmt
@@ -1122,7 +1122,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -2323,6 +2323,283 @@ export interface GeneratedFiles {
   ".github/ISSUE_TEMPLATE/security.yml": string;
   ".github/ISSUE_TEMPLATE/blank.yml": string;
   ".github/ISSUE_TEMPLATE/config.yml": string;
+  ".github/PULL_REQUEST_TEMPLATE.md": string;
+  "CONTRIBUTING.md": string;
+  "SECURITY.md": string;
+}
+
+// ============================================================================
+// PR Template Generator
+// ============================================================================
+
+/**
+ * Generate a Pull Request template
+ */
+export function generatePRTemplate(): string {
+  return `## Description
+<!-- Briefly describe what this PR does -->
+
+## Type of Change
+<!-- Mark the appropriate option with an [x] -->
+- [ ] Bug fix (non-breaking change that fixes an issue)
+- [ ] New feature (non-breaking change that adds functionality)
+- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [ ] Documentation update
+- [ ] Refactoring (no functional changes)
+- [ ] Performance improvement
+
+## Related Issues
+<!-- Link any related issues here using #issue-number -->
+Closes #
+
+## Testing
+<!-- Describe the tests you ran to verify your changes -->
+- [ ] I have added tests that prove my fix is effective or my feature works
+- [ ] New and existing unit tests pass locally with my changes
+- [ ] I have run the linter and fixed any issues
+
+## Checklist
+<!-- Mark completed items with [x] -->
+- [ ] My code follows the project's style guidelines
+- [ ] I have performed a self-review of my own code
+- [ ] I have commented my code, particularly in hard-to-understand areas
+- [ ] I have made corresponding changes to the documentation
+- [ ] My changes generate no new warnings
+- [ ] Any dependent changes have been merged and published
+
+## Screenshots (if applicable)
+<!-- Add screenshots to help explain your changes -->
+
+## Additional Notes
+<!-- Add any other context about the PR here -->
+`;
+}
+
+// ============================================================================
+// CONTRIBUTING.md Generator
+// ============================================================================
+
+/**
+ * Generate a CONTRIBUTING.md file based on project analysis
+ */
+export function generateContributing(analysis: ProjectAnalysis): string {
+  const pm = analysis.packageManager || "npm";
+  const installCmd = pm === "npm" ? "npm install" : pm === "yarn" ? "yarn install" : pm === "pnpm" ? "pnpm install" : pm === "poetry" ? "poetry install" : pm === "cargo" ? "cargo build" : "npm install";
+  const testCmd = pm === "npm" ? "npm test" : pm === "yarn" ? "yarn test" : pm === "pnpm" ? "pnpm test" : pm === "poetry" ? "poetry run pytest" : pm === "cargo" ? "cargo test" : "npm test";
+
+  return `# Contributing to ${analysis.name}
+
+Thank you for your interest in contributing! This document provides guidelines and instructions for contributing.
+
+## Code of Conduct
+
+This project adheres to a Code of Conduct. By participating, you are expected to uphold this code.
+
+## How to Contribute
+
+### Reporting Bugs
+
+Before creating bug reports, please check existing issues to avoid duplicates. When you create a bug report, include as many details as possible:
+
+- Use a clear and descriptive title
+- Describe the exact steps to reproduce the problem
+- Describe the behavior you observed and what you expected
+- Include screenshots if applicable
+- Include your environment details (OS, version, etc.)
+
+### Suggesting Enhancements
+
+Enhancement suggestions are welcome! Please provide:
+
+- A clear and descriptive title
+- A detailed description of the proposed enhancement
+- Explain why this enhancement would be useful
+- Include examples of how it would be used
+
+### Pull Requests
+
+1. **Fork the repository** and create your branch from \`main\`.
+
+2. **Set up the development environment:**
+   \`\`\`bash
+   git clone https://github.com/YOUR_USERNAME/${analysis.name}.git
+   cd ${analysis.name}
+   ${installCmd}
+   \`\`\`
+
+3. **Make your changes:**
+   - Write clear, concise commit messages
+   - Follow the existing code style
+   - Add tests for new functionality
+   - Update documentation as needed
+
+4. **Test your changes:**
+   \`\`\`bash
+   ${testCmd}
+   \`\`\`
+
+5. **Submit a pull request:**
+   - Fill out the PR template completely
+   - Link any related issues
+   - Request review from maintainers
+
+## Development Setup
+
+### Prerequisites
+
+${getPrerequisites(analysis)}
+
+### Getting Started
+
+\`\`\`bash
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/${analysis.name}.git
+cd ${analysis.name}
+
+# Install dependencies
+${installCmd}
+
+# Run tests
+${testCmd}
+\`\`\`
+
+## Style Guidelines
+
+${getStyleGuidelines(analysis)}
+
+## Commit Messages
+
+We follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+- \`feat:\` - A new feature
+- \`fix:\` - A bug fix
+- \`docs:\` - Documentation changes
+- \`style:\` - Code style changes (formatting, etc.)
+- \`refactor:\` - Code refactoring
+- \`test:\` - Adding or updating tests
+- \`chore:\` - Maintenance tasks
+
+Example: \`feat: add user authentication\`
+
+## Questions?
+
+Feel free to open an issue if you have questions about contributing.
+
+Thank you for contributing!
+`;
+}
+
+function getPrerequisites(analysis: ProjectAnalysis): string {
+  switch (analysis.language) {
+    case "node":
+      return `- Node.js (v18 or later recommended)
+- ${analysis.packageManager || "npm"}`;
+    case "python":
+      return `- Python ${analysis.pythonVersion || "3.9+"}
+- ${analysis.packageManager || "pip"}`;
+    case "rust":
+      return `- Rust (stable toolchain)
+- Cargo`;
+    case "go":
+      return `- Go ${analysis.goVersion || "1.21+"}`;
+    case "java":
+      return `- Java ${analysis.javaVersion || "17+"}
+- ${analysis.packageManager || "Maven"}`;
+    default:
+      return `- See project documentation for requirements`;
+  }
+}
+
+function getStyleGuidelines(analysis: ProjectAnalysis): string {
+  switch (analysis.language) {
+    case "node":
+      return `- Use consistent formatting (Prettier recommended)
+- Follow ESLint rules if configured
+- Use TypeScript for type safety when applicable`;
+    case "python":
+      return `- Follow PEP 8 style guidelines
+- Use type hints where appropriate
+- Format code with Black or Ruff`;
+    case "rust":
+      return `- Run \`cargo fmt\` before committing
+- Address all Clippy warnings
+- Follow Rust API guidelines`;
+    case "go":
+      return `- Run \`go fmt\` before committing
+- Follow Go code review guidelines
+- Use \`golint\` or \`staticcheck\``;
+    case "java":
+      return `- Follow Java naming conventions
+- Use consistent formatting
+- Document public APIs with Javadoc`;
+    default:
+      return `- Follow the existing code style in the project`;
+  }
+}
+
+// ============================================================================
+// SECURITY.md Generator
+// ============================================================================
+
+/**
+ * Generate a SECURITY.md file
+ */
+export function generateSecurity(analysis: ProjectAnalysis): string {
+  return `# Security Policy
+
+## Supported Versions
+
+| Version | Supported          |
+| ------- | ------------------ |
+| latest  | :white_check_mark: |
+| < 1.0   | :x:                |
+
+## Reporting a Vulnerability
+
+We take security vulnerabilities seriously. If you discover a security issue, please report it responsibly.
+
+### How to Report
+
+1. **Do NOT open a public issue** for security vulnerabilities.
+
+2. **Email us directly** at [security@example.com] (replace with your actual security contact).
+
+3. **Include the following information:**
+   - Description of the vulnerability
+   - Steps to reproduce the issue
+   - Potential impact
+   - Any suggested fixes (optional)
+
+### What to Expect
+
+- **Acknowledgment**: We will acknowledge receipt of your report within 48 hours.
+- **Assessment**: We will investigate and assess the vulnerability within 7 days.
+- **Updates**: We will keep you informed of our progress.
+- **Resolution**: We aim to resolve critical vulnerabilities within 30 days.
+- **Credit**: We will credit you in the security advisory (unless you prefer to remain anonymous).
+
+### Disclosure Policy
+
+- Please allow us reasonable time to fix vulnerabilities before public disclosure.
+- We follow coordinated disclosure practices.
+- We will work with you to understand and resolve the issue quickly.
+
+## Security Best Practices
+
+When contributing to this project:
+
+- Keep dependencies up to date
+- Never commit secrets, API keys, or credentials
+- Use environment variables for sensitive configuration
+- Follow secure coding practices
+- Review code for potential security issues
+
+## Security Updates
+
+Security updates will be released as patch versions when possible. Subscribe to releases to stay informed about security fixes.
+
+Thank you for helping keep ${analysis.name} and its users safe!
+`;
 }
 
 export function generateAllFiles(analysis: ProjectAnalysis): GeneratedFiles {
@@ -2341,5 +2618,8 @@ export function generateAllFiles(analysis: ProjectAnalysis): GeneratedFiles {
     ".github/ISSUE_TEMPLATE/security.yml": issueTemplates["security.yml"],
     ".github/ISSUE_TEMPLATE/blank.yml": issueTemplates["blank.yml"],
     ".github/ISSUE_TEMPLATE/config.yml": issueTemplates["config.yml"],
+    ".github/PULL_REQUEST_TEMPLATE.md": generatePRTemplate(),
+    "CONTRIBUTING.md": generateContributing(analysis),
+    "SECURITY.md": generateSecurity(analysis),
   };
 }
