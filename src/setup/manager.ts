@@ -28,6 +28,10 @@ import {
 import {
   generateClaudeMd,
   generateGitHubCI,
+  generateGitLabCI,
+  generateGiteaWorkflow,
+  generateBitbucketPipelines,
+  generateAzurePipelines,
   generateDependabot,
   generateReleasePlease,
   generateReleasePleaseWorkflow,
@@ -36,6 +40,13 @@ import {
   ProjectAnalysis,
 } from "./generator.js";
 import { mergeMarkdown, mergeYaml, mergeJson, MergeResult } from "./merge-strategy.js";
+import {
+  detectPlatform,
+  getPlatformConfig,
+  getPlatformIssueTemplates,
+  Platform,
+  PlatformConfig,
+} from "./platforms.js";
 
 // ============================================================================
 // Types and Interfaces
@@ -75,6 +86,8 @@ export interface SetupFeature {
   existingFile?: boolean;
   /** Whether to skip based on config */
   skip?: boolean;
+  /** The Git platform this feature is for (e.g., 'github', 'gitlab') */
+  platform?: Platform;
 }
 
 /**
@@ -145,6 +158,10 @@ export class SetupManager {
   private config: SetupConfig;
   private cachedAnalysis: SetupAnalysis | null = null;
   private cachedFreshness: FreshnessResult | null = null;
+  /** Detected Git platform (github, gitlab, gitea, bitbucket, azure, unknown) */
+  private platform: Platform = "unknown";
+  /** Platform-specific configuration */
+  private platformConfig: PlatformConfig | null = null;
 
   constructor(projectDir: string, config: SetupConfig = {}) {
     this.projectDir = validateProjectDir(projectDir);
@@ -185,6 +202,8 @@ export class SetupManager {
   /**
    * Analyze the project to understand its structure and setup needs
    *
+   * Also detects the Git platform from the remote origin URL.
+   *
    * @returns SetupAnalysis with CI needs, detected tools, entry points, and source structure
    */
   async analyzeProject(): Promise<SetupAnalysis> {
@@ -192,9 +211,31 @@ export class SetupManager {
       return this.cachedAnalysis;
     }
 
+    // Detect the Git platform from remote origin
+    this.platform = await detectPlatform(this.projectDir);
+    this.platformConfig = getPlatformConfig(this.platform);
+
     this.cachedAnalysis = await analyzeProjectForSetup(this.projectDir);
 
     return this.cachedAnalysis;
+  }
+
+  /**
+   * Get the detected Git platform
+   *
+   * @returns The detected platform (github, gitlab, gitea, bitbucket, azure, or unknown)
+   */
+  getPlatform(): Platform {
+    return this.platform;
+  }
+
+  /**
+   * Get the platform configuration
+   *
+   * @returns Platform-specific configuration or null if not detected yet
+   */
+  getPlatformConfig(): PlatformConfig | null {
+    return this.platformConfig;
   }
 
   /**
@@ -202,6 +243,7 @@ export class SetupManager {
    *
    * Returns a list of features that can be used with the orchestrator.
    * Each feature represents a config file to create or update.
+   * Uses the detected Git platform to generate platform-specific CI and template features.
    *
    * @param analysis - Project analysis result
    * @returns Array of SetupFeature definitions
@@ -210,7 +252,11 @@ export class SetupManager {
     const features: SetupFeature[] = [];
     const skipConfigs = new Set(this.config.skipConfigs || []);
 
-    // 1. CLAUDE.md - Primary project documentation for Claude Code
+    // Get platform-specific paths
+    const platformConfig = this.platformConfig || getPlatformConfig(this.platform);
+    const platformName = platformConfig.name;
+
+    // 1. CLAUDE.md - Primary project documentation for Claude Code (platform-agnostic)
     if (!skipConfigs.has("claude-md")) {
       features.push({
         id: "setup-claude-md",
@@ -222,20 +268,17 @@ export class SetupManager {
       });
     }
 
-    // 2. GitHub Actions CI Workflow
-    if (!skipConfigs.has("ci") && !skipConfigs.has("github-actions")) {
-      features.push({
-        id: "setup-github-ci",
-        description: "Set up GitHub Actions CI workflow for automated testing and building",
-        targetPath: ".github/workflows/ci.yml",
-        configType: "yaml",
-        existingFile: this.fileExists(".github/workflows/ci.yml"),
-        priority: 20,
-      });
+    // 2. CI/CD Workflow - Platform-specific
+    if (!skipConfigs.has("ci") && !skipConfigs.has(`${this.platform}-ci`)) {
+      const ciFeature = this.createPlatformCIFeature(platformConfig);
+      if (ciFeature) {
+        features.push(ciFeature);
+      }
     }
 
-    // 3. Dependabot Configuration
-    if (!skipConfigs.has("dependabot")) {
+    // 3. Dependabot Configuration (GitHub-specific)
+    // Only add for GitHub or Gitea (which has some Dependabot-like features)
+    if (!skipConfigs.has("dependabot") && (this.platform === "github" || this.platform === "gitea")) {
       features.push({
         id: "setup-dependabot",
         description: "Configure Dependabot for automated dependency updates",
@@ -243,11 +286,12 @@ export class SetupManager {
         configType: "yaml",
         existingFile: this.fileExists(".github/dependabot.yml"),
         priority: 30,
+        platform: this.platform,
       });
     }
 
-    // 4. Release Please Configuration
-    if (!skipConfigs.has("release-please") && !skipConfigs.has("release")) {
+    // 4. Release Please Configuration (GitHub-specific)
+    if (!skipConfigs.has("release-please") && !skipConfigs.has("release") && this.platform === "github") {
       features.push({
         id: "setup-release-please-config",
         description: "Configure Release Please for automated releases with semantic versioning",
@@ -255,6 +299,7 @@ export class SetupManager {
         configType: "json",
         existingFile: this.fileExists("release-please-config.json"),
         priority: 40,
+        platform: this.platform,
       });
 
       features.push({
@@ -265,30 +310,16 @@ export class SetupManager {
         existingFile: this.fileExists(".github/workflows/release-please.yml"),
         dependsOn: ["setup-release-please-config"],
         priority: 41,
+        platform: this.platform,
       });
     }
 
-    // 5. Issue Templates
+    // 5. Issue Templates - Platform-specific
     if (!skipConfigs.has("issue-templates") && !skipConfigs.has("templates")) {
-      const templateDir = ".github/ISSUE_TEMPLATE";
-      const templateFiles = [
-        { file: "bug.yml", desc: "bug report template" },
-        { file: "feature.yml", desc: "feature request template" },
-        { file: "docs.yml", desc: "documentation issue template" },
-        { file: "support.yml", desc: "support request template" },
-        { file: "security.yml", desc: "security concern template" },
-        { file: "blank.yml", desc: "blank issue template" },
-        { file: "config.yml", desc: "issue template chooser configuration" },
-      ];
-
-      features.push({
-        id: "setup-issue-templates",
-        description: "Set up GitHub issue templates for bug reports, feature requests, and more",
-        targetPath: templateDir,
-        configType: "yaml",
-        existingFile: this.directoryExists(templateDir),
-        priority: 50,
-      });
+      const templateFeature = this.createPlatformIssueTemplatesFeature(platformConfig);
+      if (templateFeature) {
+        features.push(templateFeature);
+      }
     }
 
     // Mark features to skip based on config
@@ -316,7 +347,12 @@ export class SetupManager {
       case "setup-claude-md":
         return this.buildClaudeMdPrompt(analysis, projectAnalysis);
 
+      // Platform-specific CI features
       case "setup-github-ci":
+      case "setup-gitlab-ci":
+      case "setup-gitea-ci":
+      case "setup-bitbucket-ci":
+      case "setup-azure-ci":
         return this.buildCIPrompt(analysis, projectAnalysis);
 
       case "setup-dependabot":
@@ -328,7 +364,13 @@ export class SetupManager {
       case "setup-release-please-workflow":
         return this.buildReleasePleaseWorkflowPrompt(analysis, projectAnalysis);
 
+      // Platform-specific issue template features
       case "setup-issue-templates":
+      case "setup-github-templates":
+      case "setup-gitlab-templates":
+      case "setup-gitea-templates":
+      case "setup-bitbucket-templates":
+      case "setup-azure-templates":
         return this.buildIssueTemplatesPrompt(analysis);
 
       default:
@@ -457,6 +499,124 @@ export class SetupManager {
   }
 
   // ==========================================================================
+  // Private Methods - Platform-Specific Feature Creation
+  // ==========================================================================
+
+  /**
+   * Create a CI feature definition for the detected platform
+   */
+  private createPlatformCIFeature(platformConfig: PlatformConfig): SetupFeature | null {
+    const platform = this.platform;
+    const platformName = platformConfig.name;
+
+    // Determine the CI config path and feature ID based on platform
+    let targetPath: string;
+    let featureId: string;
+    let description: string;
+
+    switch (platform) {
+      case "github":
+        targetPath = ".github/workflows/ci.yml";
+        featureId = "setup-github-ci";
+        description = `Set up GitHub Actions CI workflow for automated testing and building`;
+        break;
+      case "gitlab":
+        targetPath = ".gitlab-ci.yml";
+        featureId = "setup-gitlab-ci";
+        description = `Set up GitLab CI/CD pipeline for automated testing and building`;
+        break;
+      case "gitea":
+        targetPath = ".gitea/workflows/ci.yml";
+        featureId = "setup-gitea-ci";
+        description = `Set up Gitea Actions workflow for automated testing and building`;
+        break;
+      case "bitbucket":
+        targetPath = "bitbucket-pipelines.yml";
+        featureId = "setup-bitbucket-ci";
+        description = `Set up Bitbucket Pipelines for automated testing and building`;
+        break;
+      case "azure":
+        targetPath = "azure-pipelines.yml";
+        featureId = "setup-azure-ci";
+        description = `Set up Azure Pipelines for automated testing and building`;
+        break;
+      default:
+        // For unknown platforms, default to GitHub Actions format
+        targetPath = ".github/workflows/ci.yml";
+        featureId = "setup-github-ci";
+        description = `Set up CI workflow for automated testing and building`;
+        break;
+    }
+
+    return {
+      id: featureId,
+      description,
+      targetPath,
+      configType: "yaml",
+      existingFile: this.fileExists(targetPath),
+      priority: 20,
+      platform,
+    };
+  }
+
+  /**
+   * Create an issue templates feature definition for the detected platform
+   */
+  private createPlatformIssueTemplatesFeature(platformConfig: PlatformConfig): SetupFeature | null {
+    const platform = this.platform;
+    const platformName = platformConfig.name;
+
+    // Determine the issue templates path and feature ID based on platform
+    let targetPath: string;
+    let featureId: string;
+    let description: string;
+
+    switch (platform) {
+      case "github":
+        targetPath = ".github/ISSUE_TEMPLATE";
+        featureId = "setup-github-templates";
+        description = `Set up GitHub issue templates for bug reports, feature requests, and more`;
+        break;
+      case "gitlab":
+        targetPath = ".gitlab/issue_templates";
+        featureId = "setup-gitlab-templates";
+        description = `Set up GitLab issue templates for bug reports, feature requests, and more`;
+        break;
+      case "gitea":
+        targetPath = ".gitea/issue_template";
+        featureId = "setup-gitea-templates";
+        description = `Set up Gitea issue templates for bug reports, feature requests, and more`;
+        break;
+      case "bitbucket":
+        targetPath = ".bitbucket/issue_templates";
+        featureId = "setup-bitbucket-templates";
+        description = `Set up Bitbucket issue templates for bug reports, feature requests, and more`;
+        break;
+      case "azure":
+        targetPath = ".azuredevops/work_item_templates";
+        featureId = "setup-azure-templates";
+        description = `Set up Azure DevOps work item templates for bugs, user stories, and more`;
+        break;
+      default:
+        // For unknown platforms, default to GitHub format
+        targetPath = ".github/ISSUE_TEMPLATE";
+        featureId = "setup-github-templates";
+        description = `Set up issue templates for bug reports, feature requests, and more`;
+        break;
+    }
+
+    return {
+      id: featureId,
+      description,
+      targetPath,
+      configType: "yaml",
+      existingFile: this.directoryExists(targetPath),
+      priority: 50,
+      platform,
+    };
+  }
+
+  // ==========================================================================
   // Private Methods - Prompt Building
   // ==========================================================================
 
@@ -531,13 +691,73 @@ ${mergeInstruction}
   }
 
   /**
-   * Build prompt for GitHub Actions CI setup
+   * Build prompt for CI setup (platform-aware)
    */
   private buildCIPrompt(analysis: SetupAnalysis, projectAnalysis: ProjectAnalysis): string {
-    const generatedContent = generateGitHubCI(projectAnalysis);
-    const existingPath = path.join(this.projectDir, ".github/workflows/ci.yml");
-    const existingContent = this.fileExists(".github/workflows/ci.yml")
-      ? fs.readFileSync(existingPath, "utf-8")
+    const platform = this.platform;
+    const platformConfig = this.platformConfig || getPlatformConfig(platform);
+    const platformName = platformConfig.name;
+
+    // Generate platform-specific CI content
+    let generatedContent: string;
+    let targetPath: string;
+    let ciSystemName: string;
+
+    // Map generator ProjectAnalysis to the format expected by generateCI
+    const genProjectAnalysis = {
+      language: projectAnalysis.language === "node" ? "node" as const :
+                projectAnalysis.language === "python" ? "python" as const :
+                projectAnalysis.language === "rust" ? "rust" as const :
+                projectAnalysis.language === "go" ? "go" as const :
+                projectAnalysis.language === "java" ? "java" as const :
+                "unknown" as const,
+      packageManager: projectAnalysis.packageManager,
+      nodeVersion: undefined as string | undefined,
+      pythonVersion: undefined as string | undefined,
+      hasTests: projectAnalysis.hasTests,
+      hasLinting: projectAnalysis.hasLinting,
+      hasTypeCheck: false,
+      buildCommand: projectAnalysis.scripts?.build ? `npm run build` : undefined,
+      testCommand: projectAnalysis.scripts?.test ? `npm test` : undefined,
+      lintCommand: projectAnalysis.scripts?.lint ? `npm run lint` : undefined,
+    };
+
+    switch (platform) {
+      case "github":
+        generatedContent = generateGitHubCI(projectAnalysis);
+        targetPath = ".github/workflows/ci.yml";
+        ciSystemName = "GitHub Actions";
+        break;
+      case "gitlab":
+        generatedContent = generateGitLabCI(genProjectAnalysis, genProjectAnalysis.language);
+        targetPath = ".gitlab-ci.yml";
+        ciSystemName = "GitLab CI/CD";
+        break;
+      case "gitea":
+        generatedContent = generateGiteaWorkflow(genProjectAnalysis, genProjectAnalysis.language);
+        targetPath = ".gitea/workflows/ci.yml";
+        ciSystemName = "Gitea Actions";
+        break;
+      case "bitbucket":
+        generatedContent = generateBitbucketPipelines(genProjectAnalysis, genProjectAnalysis.language);
+        targetPath = "bitbucket-pipelines.yml";
+        ciSystemName = "Bitbucket Pipelines";
+        break;
+      case "azure":
+        generatedContent = generateAzurePipelines(genProjectAnalysis, genProjectAnalysis.language);
+        targetPath = "azure-pipelines.yml";
+        ciSystemName = "Azure Pipelines";
+        break;
+      default:
+        // Default to GitHub Actions for unknown platforms
+        generatedContent = generateGitHubCI(projectAnalysis);
+        targetPath = ".github/workflows/ci.yml";
+        ciSystemName = "CI workflow";
+        break;
+    }
+
+    const existingContent = this.fileExists(targetPath)
+      ? fs.readFileSync(path.join(this.projectDir, targetPath), "utf-8")
       : null;
 
     let mergeInstruction = "";
@@ -545,7 +765,7 @@ ${mergeInstruction}
       const mergeResult = mergeYaml(existingContent, generatedContent);
       mergeInstruction = `
 ## Merge Instructions
-An existing ci.yml file was found. The existing configuration should be preserved where possible.
+An existing CI config file was found. The existing configuration should be preserved where possible.
 - Keys preserved: ${mergeResult.preserved.slice(0, 10).join(", ") || "none"}
 - Keys to add: ${mergeResult.added.join(", ") || "none"}
 
@@ -553,10 +773,10 @@ Review the existing workflow and only add missing essential steps.
 `;
     }
 
-    return `You are setting up GitHub Actions CI for this repository.
+    return `You are setting up ${ciSystemName} for this ${platformName} repository.
 
 ## Task
-Create or update the GitHub Actions CI workflow at .github/workflows/ci.yml.
+Create or update the ${ciSystemName} configuration at ${targetPath}.
 
 ## Project Analysis
 - Language: ${analysis.projectInfo.type}
@@ -565,9 +785,10 @@ Create or update the GitHub Actions CI workflow at .github/workflows/ci.yml.
 - Has Tests: ${analysis.ciNeeds.test}
 - Has Linting: ${analysis.ciNeeds.lint}
 - Has Type Checking: ${analysis.ciNeeds.typecheck}
+- Git Platform: ${platformName}
 
 ## Generated Template
-Here is a generated CI workflow template:
+Here is a generated ${ciSystemName} template:
 
 \`\`\`yaml
 ${generatedContent}
@@ -577,13 +798,14 @@ ${mergeInstruction}
 1. Review the generated template
 2. Verify the package manager and language versions match the project
 3. Check that the build, test, and lint commands match the actual project scripts
-4. Create the .github/workflows directory if it doesn't exist
-5. Write the ci.yml file
+4. Create any necessary directories if they don't exist
+5. Write the CI configuration file
 
 ## Important
 - Use the correct package manager commands (npm/yarn/pnpm)
 - Match the Node.js/Python/etc version to what the project uses
 - Include all relevant CI steps based on the project's actual tooling
+- This is a ${platformName} repository, so use ${ciSystemName} format
 `;
   }
 
@@ -690,34 +912,77 @@ ${generatedContent}
   }
 
   /**
-   * Build prompt for Issue Templates setup
+   * Build prompt for Issue Templates setup (platform-aware)
    */
   private buildIssueTemplatesPrompt(analysis: SetupAnalysis): string {
-    const templates = generateIssueTemplates();
+    const platform = this.platform;
+    const platformConfig = this.platformConfig || getPlatformConfig(platform);
+    const platformName = platformConfig.name;
+
+    // Get platform-specific templates
+    const templates = getPlatformIssueTemplates(platform);
+
+    // Determine the template directory based on platform
+    let templateDir: string;
+    let templateType: string;
+
+    switch (platform) {
+      case "github":
+        templateDir = ".github/ISSUE_TEMPLATE";
+        templateType = "issue templates";
+        break;
+      case "gitlab":
+        templateDir = ".gitlab/issue_templates";
+        templateType = "issue templates";
+        break;
+      case "gitea":
+        templateDir = ".gitea/issue_template";
+        templateType = "issue templates";
+        break;
+      case "bitbucket":
+        templateDir = ".bitbucket/issue_templates";
+        templateType = "issue templates";
+        break;
+      case "azure":
+        templateDir = ".azuredevops/work_item_templates";
+        templateType = "work item templates";
+        break;
+      default:
+        templateDir = ".github/ISSUE_TEMPLATE";
+        templateType = "issue templates";
+        break;
+    }
 
     let templatesContent = "";
     for (const [filename, content] of Object.entries(templates)) {
-      templatesContent += `### ${filename}\n\`\`\`yaml\n${content}\`\`\`\n\n`;
+      // Extract just the filename from the full path
+      const shortFilename = filename.split("/").pop() || filename;
+      templatesContent += `### ${shortFilename}\n\`\`\`markdown\n${content}\`\`\`\n\n`;
     }
 
-    return `You are setting up GitHub Issue Templates for this repository.
+    return `You are setting up ${platformName} ${templateType} for this repository.
 
 ## Task
-Create GitHub issue templates in .github/ISSUE_TEMPLATE/ directory.
+Create ${templateType} in the ${templateDir}/ directory.
+
+## Platform
+This is a ${platformName} repository, so use the ${platformName}-specific template format.
 
 ## Generated Templates
 ${templatesContent}
 
 ## Instructions
-1. Create the .github/ISSUE_TEMPLATE directory if it doesn't exist
+1. Create the ${templateDir} directory if it doesn't exist
 2. Create each template file with the content shown above
-3. Update the config.yml with the actual repository owner and name
-4. Replace "OWNER/REPO" placeholders with the actual values
+3. Update any placeholders (like "OWNER/REPO") with actual values
+4. Adjust template content to match your project's specific needs
 
 ## Important
-- Issue templates use YAML form syntax
-- Each template should have appropriate labels
-- The config.yml controls the template chooser behavior
+- Each template is formatted for ${platformName}'s template system
+- Templates should have appropriate labels for your project
+${platform === "github" ? "- The config.yml controls the template chooser behavior" : ""}
+${platform === "gitlab" ? "- GitLab templates use simple markdown with optional /label quick actions" : ""}
+${platform === "azure" ? "- Azure DevOps templates can include work item field mappings" : ""}
 `;
   }
 

@@ -706,6 +706,1077 @@ jobs:
 }
 
 // ============================================================================
+// Platform-Specific CI Generators (GitLab, Gitea, Bitbucket, Azure)
+// ============================================================================
+
+/**
+ * Analysis input for platform-specific CI generators
+ */
+export interface PlatformCIAnalysis {
+  language: SupportedLanguage | "unknown";
+  packageManager?: string;
+  nodeVersion?: string;
+  pythonVersion?: string;
+  hasTests?: boolean;
+  hasLinting?: boolean;
+  hasTypeCheck?: boolean;
+  buildCommand?: string;
+  testCommand?: string;
+  lintCommand?: string;
+}
+
+/**
+ * Generate GitLab CI/CD pipeline configuration
+ */
+export function generateGitLabCI(analysis: PlatformCIAnalysis, language: SupportedLanguage | "unknown"): string {
+  const lang = language || analysis.language;
+
+  switch (lang) {
+    case "node":
+      return generateGitLabNodeCI(analysis);
+    case "python":
+      return generateGitLabPythonCI(analysis);
+    case "rust":
+      return generateGitLabRustCI(analysis);
+    case "go":
+      return generateGitLabGoCI(analysis);
+    case "java":
+      return generateGitLabJavaCI(analysis);
+    default:
+      return generateGitLabNodeCI(analysis);
+  }
+}
+
+function generateGitLabNodeCI(analysis: PlatformCIAnalysis): string {
+  const nodeVersion = analysis.nodeVersion || "20";
+  const pm = analysis.packageManager || "npm";
+  const installCmd = pm === "yarn" ? "yarn install --frozen-lockfile" :
+                     pm === "pnpm" ? "pnpm install --frozen-lockfile" : "npm ci";
+
+  return `image: node:${nodeVersion}
+
+stages:
+  - install
+  - lint
+  - test
+  - build
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+    - .npm/
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+
+install:
+  stage: install
+  script:
+    - ${installCmd}
+  artifacts:
+    paths:
+      - node_modules/
+
+lint:
+  stage: lint
+  script:
+    - ${pm === "npm" ? "npm run" : pm} lint
+  allow_failure: true
+
+test:
+  stage: test
+  script:
+    - ${pm === "npm" ? "npm" : pm} test
+  coverage: '/All files[^|]*\\|[^|]*\\s+([\\d\\.]+)/'
+
+build:
+  stage: build
+  script:
+    - ${pm === "npm" ? "npm run" : pm} build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+`;
+}
+
+function generateGitLabPythonCI(analysis: PlatformCIAnalysis): string {
+  const pythonVersion = analysis.pythonVersion || "3.11";
+
+  return `image: python:${pythonVersion}
+
+stages:
+  - install
+  - lint
+  - test
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - .cache/pip
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+install:
+  stage: install
+  script:
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install pytest ruff mypy
+
+lint:
+  stage: lint
+  script:
+    - ruff check .
+  allow_failure: true
+
+type-check:
+  stage: lint
+  script:
+    - mypy .
+  allow_failure: true
+
+test:
+  stage: test
+  script:
+    - pytest --cov=. --cov-report=xml
+  coverage: '/TOTAL.*\\s+(\\d+%)/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+`;
+}
+
+function generateGitLabRustCI(analysis: PlatformCIAnalysis): string {
+  return `image: rust:latest
+
+stages:
+  - check
+  - test
+  - build
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - target/
+    - .cargo/
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+
+format:
+  stage: check
+  script:
+    - rustup component add rustfmt
+    - cargo fmt --all -- --check
+
+clippy:
+  stage: check
+  script:
+    - rustup component add clippy
+    - cargo clippy --all-targets --all-features -- -D warnings
+
+test:
+  stage: test
+  script:
+    - cargo test --verbose
+
+build:
+  stage: build
+  script:
+    - cargo build --release
+  artifacts:
+    paths:
+      - target/release/
+    expire_in: 1 week
+`;
+}
+
+function generateGitLabGoCI(analysis: PlatformCIAnalysis): string {
+  return `image: golang:1.21
+
+stages:
+  - lint
+  - test
+  - build
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - /go/pkg/mod/
+
+lint:
+  stage: lint
+  image: golangci/golangci-lint:latest
+  script:
+    - golangci-lint run
+  allow_failure: true
+
+test:
+  stage: test
+  script:
+    - go mod download
+    - go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+  coverage: '/total:\\s+\\(statements\\)\\s+(\\d+\\.\\d+%)/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+build:
+  stage: build
+  script:
+    - go build -v ./...
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 1 week
+`;
+}
+
+function generateGitLabJavaCI(analysis: PlatformCIAnalysis): string {
+  const useGradle = analysis.packageManager === "gradle";
+
+  if (useGradle) {
+    return `image: gradle:jdk17
+
+stages:
+  - build
+  - test
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - .gradle/
+
+variables:
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+
+build:
+  stage: build
+  script:
+    - gradle build -x test
+
+test:
+  stage: test
+  script:
+    - gradle test
+  artifacts:
+    reports:
+      junit:
+        - build/test-results/test/*.xml
+`;
+  }
+
+  return `image: maven:3-openjdk-17
+
+stages:
+  - build
+  - test
+
+cache:
+  key: \${CI_COMMIT_REF_SLUG}
+  paths:
+    - .m2/repository
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+build:
+  stage: build
+  script:
+    - mvn compile -B
+
+test:
+  stage: test
+  script:
+    - mvn test -B
+  artifacts:
+    reports:
+      junit:
+        - target/surefire-reports/*.xml
+`;
+}
+
+/**
+ * Generate Gitea Actions workflow (GitHub Actions compatible)
+ */
+export function generateGiteaWorkflow(analysis: PlatformCIAnalysis, language: SupportedLanguage | "unknown"): string {
+  const lang = language || analysis.language;
+
+  switch (lang) {
+    case "node":
+      return generateGiteaNodeCI(analysis);
+    case "python":
+      return generateGiteaPythonCI(analysis);
+    case "rust":
+      return generateGiteaRustCI(analysis);
+    case "go":
+      return generateGiteaGoCI(analysis);
+    case "java":
+      return generateGiteaJavaCI(analysis);
+    default:
+      return generateGiteaNodeCI(analysis);
+  }
+}
+
+function generateGiteaNodeCI(analysis: PlatformCIAnalysis): string {
+  const nodeVersion = analysis.nodeVersion || "20";
+  const pm = analysis.packageManager || "npm";
+  const installCmd = pm === "yarn" ? "yarn install --frozen-lockfile" :
+                     pm === "pnpm" ? "pnpm install --frozen-lockfile" : "npm ci";
+
+  return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '${nodeVersion}'
+
+      - name: Install dependencies
+        run: ${installCmd}
+
+      - name: Lint
+        run: ${pm === "npm" ? "npm run" : pm} lint
+
+      - name: Test
+        run: ${pm === "npm" ? "npm" : pm} test
+
+      - name: Build
+        run: ${pm === "npm" ? "npm run" : pm} build
+`;
+}
+
+function generateGiteaPythonCI(analysis: PlatformCIAnalysis): string {
+  const pythonVersion = analysis.pythonVersion || "3.11";
+
+  return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '${pythonVersion}'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest
+`;
+}
+
+function generateGiteaRustCI(analysis: PlatformCIAnalysis): string {
+  return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Test
+        run: cargo test --verbose
+`;
+}
+
+function generateGiteaGoCI(analysis: PlatformCIAnalysis): string {
+  return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        run: go test -v ./...
+`;
+}
+
+function generateGiteaJavaCI(analysis: PlatformCIAnalysis): string {
+  const useGradle = analysis.packageManager === "gradle";
+
+  if (useGradle) {
+    return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Test
+        run: ./gradlew test
+`;
+  }
+
+  return `name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Build with Maven
+        run: mvn -B compile
+
+      - name: Test
+        run: mvn -B test
+`;
+}
+
+/**
+ * Generate Bitbucket Pipelines configuration
+ */
+export function generateBitbucketPipelines(analysis: PlatformCIAnalysis, language: SupportedLanguage | "unknown"): string {
+  const lang = language || analysis.language;
+
+  switch (lang) {
+    case "node":
+      return generateBitbucketNodeCI(analysis);
+    case "python":
+      return generateBitbucketPythonCI(analysis);
+    case "rust":
+      return generateBitbucketRustCI(analysis);
+    case "go":
+      return generateBitbucketGoCI(analysis);
+    case "java":
+      return generateBitbucketJavaCI(analysis);
+    default:
+      return generateBitbucketNodeCI(analysis);
+  }
+}
+
+function generateBitbucketNodeCI(analysis: PlatformCIAnalysis): string {
+  const nodeVersion = analysis.nodeVersion || "20";
+  const pm = analysis.packageManager || "npm";
+  const installCmd = pm === "yarn" ? "yarn install --frozen-lockfile" :
+                     pm === "pnpm" ? "pnpm install --frozen-lockfile" : "npm ci";
+
+  return `image: node:${nodeVersion}
+
+definitions:
+  caches:
+    npm: ~/.npm
+
+pipelines:
+  default:
+    - parallel:
+        - step:
+            name: Lint
+            caches:
+              - npm
+            script:
+              - ${installCmd}
+              - ${pm === "npm" ? "npm run" : pm} lint
+
+        - step:
+            name: Test
+            caches:
+              - npm
+            script:
+              - ${installCmd}
+              - ${pm === "npm" ? "npm" : pm} test
+
+    - step:
+        name: Build
+        caches:
+          - npm
+        script:
+          - ${installCmd}
+          - ${pm === "npm" ? "npm run" : pm} build
+        artifacts:
+          - dist/**
+
+  pull-requests:
+    '**':
+      - step:
+          name: Build and Test
+          caches:
+            - npm
+          script:
+            - ${installCmd}
+            - ${pm === "npm" ? "npm run" : pm} lint
+            - ${pm === "npm" ? "npm" : pm} test
+            - ${pm === "npm" ? "npm run" : pm} build
+`;
+}
+
+function generateBitbucketPythonCI(analysis: PlatformCIAnalysis): string {
+  const pythonVersion = analysis.pythonVersion || "3.11";
+
+  return `image: python:${pythonVersion}
+
+definitions:
+  caches:
+    pip: ~/.cache/pip
+
+pipelines:
+  default:
+    - parallel:
+        - step:
+            name: Lint
+            caches:
+              - pip
+            script:
+              - pip install ruff
+              - ruff check .
+
+        - step:
+            name: Test
+            caches:
+              - pip
+            script:
+              - pip install -r requirements.txt
+              - pip install pytest
+              - pytest
+
+  pull-requests:
+    '**':
+      - step:
+          name: Lint and Test
+          caches:
+            - pip
+          script:
+            - pip install -r requirements.txt
+            - pip install pytest ruff
+            - ruff check .
+            - pytest
+`;
+}
+
+function generateBitbucketRustCI(analysis: PlatformCIAnalysis): string {
+  return `image: rust:latest
+
+definitions:
+  caches:
+    cargo: ~/.cargo
+
+pipelines:
+  default:
+    - step:
+        name: Check
+        caches:
+          - cargo
+        script:
+          - rustup component add rustfmt clippy
+          - cargo fmt --all -- --check
+          - cargo clippy --all-targets --all-features -- -D warnings
+
+    - step:
+        name: Test
+        caches:
+          - cargo
+        script:
+          - cargo test --verbose
+
+    - step:
+        name: Build
+        caches:
+          - cargo
+        script:
+          - cargo build --release
+        artifacts:
+          - target/release/**
+
+  pull-requests:
+    '**':
+      - step:
+          name: Check and Test
+          caches:
+            - cargo
+          script:
+            - rustup component add rustfmt clippy
+            - cargo fmt --all -- --check
+            - cargo clippy --all-targets -- -D warnings
+            - cargo test
+`;
+}
+
+function generateBitbucketGoCI(analysis: PlatformCIAnalysis): string {
+  return `image: golang:1.21
+
+definitions:
+  caches:
+    gomod: ~/go/pkg/mod
+
+pipelines:
+  default:
+    - parallel:
+        - step:
+            name: Lint
+            caches:
+              - gomod
+            script:
+              - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+              - golangci-lint run
+
+        - step:
+            name: Test
+            caches:
+              - gomod
+            script:
+              - go mod download
+              - go test -v -race ./...
+
+    - step:
+        name: Build
+        caches:
+          - gomod
+        script:
+          - go build -v ./...
+
+  pull-requests:
+    '**':
+      - step:
+          name: Test and Build
+          caches:
+            - gomod
+          script:
+            - go mod download
+            - go test -v ./...
+            - go build -v ./...
+`;
+}
+
+function generateBitbucketJavaCI(analysis: PlatformCIAnalysis): string {
+  const useGradle = analysis.packageManager === "gradle";
+
+  if (useGradle) {
+    return `image: gradle:jdk17
+
+definitions:
+  caches:
+    gradle: ~/.gradle
+
+pipelines:
+  default:
+    - step:
+        name: Build and Test
+        caches:
+          - gradle
+        script:
+          - gradle build
+
+  pull-requests:
+    '**':
+      - step:
+          name: Build and Test
+          caches:
+            - gradle
+          script:
+            - gradle build
+`;
+  }
+
+  return `image: maven:3-openjdk-17
+
+definitions:
+  caches:
+    maven: ~/.m2/repository
+
+pipelines:
+  default:
+    - step:
+        name: Build and Test
+        caches:
+          - maven
+        script:
+          - mvn -B compile
+          - mvn -B test
+
+  pull-requests:
+    '**':
+      - step:
+          name: Build and Test
+          caches:
+            - maven
+          script:
+            - mvn -B compile
+            - mvn -B test
+`;
+}
+
+/**
+ * Generate Azure Pipelines configuration
+ */
+export function generateAzurePipelines(analysis: PlatformCIAnalysis, language: SupportedLanguage | "unknown"): string {
+  const lang = language || analysis.language;
+
+  switch (lang) {
+    case "node":
+      return generateAzureNodeCI(analysis);
+    case "python":
+      return generateAzurePythonCI(analysis);
+    case "rust":
+      return generateAzureRustCI(analysis);
+    case "go":
+      return generateAzureGoCI(analysis);
+    case "java":
+      return generateAzureJavaCI(analysis);
+    default:
+      return generateAzureNodeCI(analysis);
+  }
+}
+
+function generateAzureNodeCI(analysis: PlatformCIAnalysis): string {
+  const nodeVersion = analysis.nodeVersion || "20";
+  const pm = analysis.packageManager || "npm";
+  const installCmd = pm === "yarn" ? "yarn install --frozen-lockfile" :
+                     pm === "pnpm" ? "pnpm install --frozen-lockfile" : "npm ci";
+
+  return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  nodeVersion: '${nodeVersion}'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '$(nodeVersion)'
+            displayName: 'Install Node.js'
+
+          - script: ${installCmd}
+            displayName: 'Install dependencies'
+
+          - script: ${pm === "npm" ? "npm run" : pm} lint
+            displayName: 'Lint'
+            continueOnError: true
+
+          - script: ${pm === "npm" ? "npm" : pm} test
+            displayName: 'Test'
+
+          - script: ${pm === "npm" ? "npm run" : pm} build
+            displayName: 'Build'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: 'dist'
+              artifactName: 'dist'
+`;
+}
+
+function generateAzurePythonCI(analysis: PlatformCIAnalysis): string {
+  const pythonVersion = analysis.pythonVersion || "3.11";
+
+  return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  pythonVersion: '${pythonVersion}'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+            displayName: 'Use Python $(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+              pip install pytest ruff
+            displayName: 'Install dependencies'
+
+          - script: ruff check .
+            displayName: 'Lint'
+            continueOnError: true
+
+          - script: pytest --junitxml=test-results.xml
+            displayName: 'Test'
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/test-results.xml'
+            condition: succeededOrFailed()
+`;
+}
+
+function generateAzureRustCI(analysis: PlatformCIAnalysis): string {
+  return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - script: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source $HOME/.cargo/env
+              rustup component add rustfmt clippy
+            displayName: 'Install Rust'
+
+          - script: |
+              source $HOME/.cargo/env
+              cargo fmt --all -- --check
+            displayName: 'Check formatting'
+
+          - script: |
+              source $HOME/.cargo/env
+              cargo clippy --all-targets --all-features -- -D warnings
+            displayName: 'Clippy'
+
+          - script: |
+              source $HOME/.cargo/env
+              cargo build --release
+            displayName: 'Build'
+
+          - script: |
+              source $HOME/.cargo/env
+              cargo test --verbose
+            displayName: 'Test'
+`;
+}
+
+function generateAzureGoCI(analysis: PlatformCIAnalysis): string {
+  return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  goVersion: '1.21'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - task: GoTool@0
+            inputs:
+              version: '$(goVersion)'
+            displayName: 'Use Go $(goVersion)'
+
+          - script: go mod download
+            displayName: 'Download dependencies'
+
+          - script: go build -v ./...
+            displayName: 'Build'
+
+          - script: go test -v -race -coverprofile=coverage.txt ./...
+            displayName: 'Test'
+
+          - task: PublishCodeCoverageResults@1
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: 'coverage.txt'
+            condition: succeededOrFailed()
+`;
+}
+
+function generateAzureJavaCI(analysis: PlatformCIAnalysis): string {
+  const useGradle = analysis.packageManager === "gradle";
+
+  if (useGradle) {
+    return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - task: Gradle@2
+            inputs:
+              gradleWrapperFile: 'gradlew'
+              tasks: 'build'
+              publishJUnitResults: true
+              testResultsFiles: '**/TEST-*.xml'
+            displayName: 'Build with Gradle'
+`;
+  }
+
+  return `trigger:
+  - main
+  - master
+
+pr:
+  - main
+  - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: Build
+        steps:
+          - task: Maven@3
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'compile test'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+            displayName: 'Build with Maven'
+`;
+}
+
+// ============================================================================
 // Release Please Generator
 // ============================================================================
 
