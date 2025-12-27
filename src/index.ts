@@ -5361,11 +5361,11 @@ server.tool(
     // Initialize setup state
     setupManager.initializeSetup();
 
-    // Start workers for features without dependencies
+    // Start workers for features without dependencies (up to 3 in parallel)
     const startableFeatures = orchestratorFeatures.filter(f => !f.dependsOn || f.dependsOn.length === 0);
     const startedWorkers: string[] = [];
 
-    for (const feature of startableFeatures.slice(0, 3)) { // Start up to 3 workers in parallel
+    const workerPromises = startableFeatures.slice(0, 3).map(async (feature) => {
       // Build the setup prompt
       const prompt = setupManager.buildSetupPrompt(feature.id, analysis);
 
@@ -5381,7 +5381,8 @@ server.tool(
 
         newState.progressLog.push(`[${new Date().toISOString()}] Started setup worker for ${feature.id}`);
       }
-    }
+    });
+    await Promise.all(workerPromises);
 
     state.save(newState);
     state.writeProgressFile();

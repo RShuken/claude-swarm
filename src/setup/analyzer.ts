@@ -397,11 +397,11 @@ export class SetupAnalyzer {
       detected.push("clippy");
     }
 
-    // Go-specific: golangci-lint detection
+    // Go-specific: golangci detection
     if (projectInfo.type === "go") {
       for (const file of LINTER_INDICATORS.golangci.files) {
         if (this.fileExists(file)) {
-          detected.push("golangci-lint");
+          detected.push("golangci");
           break;
         }
       }
@@ -478,12 +478,16 @@ export class SetupAnalyzer {
     for (const [checker, indicators] of Object.entries(TYPECHECKER_INDICATORS)) {
       // Check for config files
       for (const file of indicators.files) {
-        // Handle glob patterns for tsconfig
+        // Handle glob patterns for tsconfig (e.g., tsconfig.*.json)
         if (file.includes("*")) {
-          const baseFile = file.replace(".*", "");
-          if (this.fileExists(baseFile + ".json")) {
-            detected.push(checker);
-            break;
+          try {
+            const files = fs.readdirSync(this.projectDir);
+            if (files.some(f => /^tsconfig\..*\.json$/.test(f))) {
+              detected.push(checker);
+              break;
+            }
+          } catch {
+            // Skip on read error
           }
         } else if (this.fileExists(file)) {
           if (checker === "mypy" && file === "pyproject.toml") {
@@ -823,7 +827,7 @@ export class SetupAnalyzer {
         if (scriptMatch) {
           const lines = scriptMatch[1].split("\n");
           for (const line of lines) {
-            const match = line.match(/(\w+)\s*=\s*"([^"]+)"/);
+            const match = line.match(/^\s*([\w.-]+)\s*=\s*["']([^"']+)["']/);
             if (match) {
               entryPoints.push({ path: match[2], type: "binary", name: match[1] });
             }
