@@ -11,7 +11,7 @@ An MCP server for orchestrating parallel Claude Code worker swarms with protocol
 - **Confidence Monitoring** - Multi-signal scoring detects struggling workers
 - **Auto-retry** - Failed features automatically retry with configurable limits
 - **Feature Dependencies** - Define execution order between features
-- **Post-Completion Reviews** - Automated code and architecture reviews after swarm completes
+- **Post-Completion Reviews** - Automated code and architecture reviews with actionable findings
 
 ### Protocol-Based Governance
 - **Behavioral Protocols** - Define constraints on what workers can/cannot do
@@ -20,11 +20,18 @@ An MCP server for orchestrating parallel Claude Code worker swarms with protocol
 - **LLM-Generated Protocols** - Workers can propose new protocols (validated against base constraints)
 - **Cross-instance Sync** - Share protocols across MCP instances
 
-### Monitoring
-- **Real-time Dashboard** - Web UI at `http://localhost:3456`
-- **Live Terminal Streaming** - Watch worker output in real-time
+### Monitoring & Dashboard
+- **Real-time Web Dashboard** - Live UI at `http://localhost:3456` with Server-Sent Events
+- **Live Terminal Streaming** - Watch worker output with ANSI color support
+- **Review Worker Visibility** - Code and architecture review progress in dashboard
 - **Violation Tracking** - Audit log of all protocol violations
 - **Git Checkpoints** - Commit progress after each feature
+
+### Repository Setup
+- **Auto-Configuration** - Set up CI/CD, issue templates, and documentation in parallel
+- **Platform Detection** - GitHub, GitLab, Gitea, Bitbucket, Azure DevOps support
+- **Project Analysis** - Detects languages, frameworks, and adapts configuration
+- **Merge Mode** - Preserves existing configs by default, with optional force overwrite
 
 ## Quick Start
 
@@ -160,7 +167,7 @@ Real-time confidence scoring detects struggling workers:
 
 | Signal | Weight | Measures |
 |--------|--------|----------|
-| Tool Activity | 35% | Read→Edit→Test cycles, stuck loops |
+| Tool Activity | 35% | Read->Edit->Test cycles, stuck loops |
 | Self-Reported | 35% | Worker writes to `.confidence` file |
 | Output Analysis | 30% | Error patterns, frustration language |
 
@@ -176,7 +183,7 @@ get_worker_confidence(featureId)   # Get detailed breakdown
 Automated code and architecture reviews run after all workers complete:
 
 ```
-1. All features complete → session status changes to "reviewing"
+1. All features complete -> session status changes to "reviewing"
 2. Code review worker analyzes: bugs, security, style, test coverage
 3. Architecture review worker analyzes: coupling, patterns, scalability
 4. Findings aggregated into progress log
@@ -189,6 +196,21 @@ Review workers output structured JSON findings:
 
 **Severity levels**: clean, minor, moderate, major, critical
 
+### Acting on Review Findings
+
+Convert review findings into actionable features:
+
+```
+# View available issues from reviews
+implement_review_suggestions(projectDir)
+
+# Create features from specific issues
+implement_review_suggestions(projectDir, issueIndices: [0, 2, 5])
+
+# Auto-select warnings and errors
+implement_review_suggestions(projectDir, autoSelect: true, minSeverity: "warning")
+```
+
 Configure or trigger manually:
 ```
 configure_reviews(enabled: true, skipOnFailure: false)
@@ -196,37 +218,88 @@ run_review(reviewTypes: ["code", "architecture"])
 get_review_results(format: "detailed")
 ```
 
+## Repository Setup
+
+Automatically configure repositories with development best practices:
+
+```
+# Analyze repository freshness and missing configs
+setup_analyze(projectDir)
+
+# Initialize setup with parallel workers
+setup_init(projectDir)
+
+# Check setup progress
+setup_status(projectDir)
+```
+
+### Configuration Types
+
+| Type | Description | Files Created |
+|------|-------------|---------------|
+| **CLAUDE.md** | Project guidance for Claude Code | `CLAUDE.md` |
+| **GitHub CI** | Build, test, lint workflows | `.github/workflows/ci.yml` |
+| **Dependabot** | Automated dependency updates | `.github/dependabot.yml` |
+| **Release Please** | Automated version bumps and changelogs | `.github/workflows/release-please.yml` |
+| **Issue Templates** | Structured bug/feature reporting | `.github/ISSUE_TEMPLATE/*.yml` |
+| **PR Template** | Consistent pull request descriptions | `.github/PULL_REQUEST_TEMPLATE.md` |
+| **CONTRIBUTING.md** | Contribution guidelines | `CONTRIBUTING.md` |
+| **SECURITY.md** | Security policy and vulnerability reporting | `SECURITY.md` |
+
+### Customization
+
+```bash
+# Skip specific config types
+setup_init(projectDir, skipConfigs: ["dependabot", "release-please"])
+
+# Force overwrite existing files
+setup_init(projectDir, force: true)
+
+# Override platform detection
+setup_init(projectDir, platform: "gitlab")
+```
+
+## Web Dashboard
+
+A real-time web dashboard is available at `http://localhost:3456`:
+
+- **Session Overview** - Progress bar, feature counts, session statistics
+- **Feature Cards** - Status, dependencies, worker assignment
+- **Live Terminal Output** - Real-time streaming with ANSI color support
+- **Review Worker Progress** - Code and architecture review visibility
+- **Dark Mode** - Automatic theme detection
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          MCP Server                                  │
-│              (Persistent state, survives compaction)                 │
-│                                                                      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │    State     │  │    Worker    │  │   Protocol   │              │
-│  │   Manager    │  │   Manager    │  │   Registry   │              │
-│  └──────────────┘  └──────────────┘  └──────────────┘              │
-│         │                 │                  │                       │
-│  ┌──────┴─────────────────┴──────────────────┴────────────────────┐ │
-│  │  Enforcement Engine  │  Resolver  │  Context Enricher          │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│                              │                                       │
-│  ┌───────────────────────────┴────────────────────────────────────┐ │
-│  │  Review Manager  │  Complexity Detector  │  Plan Evaluator     │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│                              │                                       │
-│  ┌───────────────────────────┴────────────────────────────────────┐ │
-│  │                     Web Dashboard (SSE)                         │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │ MCP Protocol
-┌──────────────────────────────┼──────────────────────────────────────┐
-│                         Claude Code                                  │
-│                                                                      │
-│      Context compacts → Just call orchestrator_status                │
-│      Protocol violations → Automatic blocking/warning                │
-└─────────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------------+
+|                          MCP Server                                    |
+|              (Persistent state, survives compaction)                   |
+|                                                                        |
+|  +--------------+  +--------------+  +--------------+                 |
+|  |    State     |  |    Worker    |  |   Protocol   |                 |
+|  |   Manager    |  |   Manager    |  |   Registry   |                 |
+|  +--------------+  +--------------+  +--------------+                 |
+|         |                 |                  |                         |
+|  +------+-----------------+------------------+------------------------+|
+|  |  Enforcement Engine  |  Resolver  |  Context Enricher             ||
+|  +--------------------------------------------------------------------+|
+|                              |                                         |
+|  +---------------------------+----------------------------------------+|
+|  |  Review Manager  |  Complexity Detector  |  Plan Evaluator        ||
+|  +--------------------------------------------------------------------+|
+|                              |                                         |
+|  +---------------------------+----------------------------------------+|
+|  |                     Web Dashboard (SSE)                            ||
+|  +--------------------------------------------------------------------+|
++--------------------------------+--------------------------------------+
+                                 | MCP Protocol
++--------------------------------+--------------------------------------+
+|                         Claude Code                                    |
+|                                                                        |
+|      Context compacts -> Just call orchestrator_status                 |
+|      Protocol violations -> Automatic blocking/warning                 |
++-----------------------------------------------------------------------+
 ```
 
 ## MCP Tools Reference
@@ -279,13 +352,21 @@ get_review_results(format: "detailed")
 | `resume_session` | Resume paused session |
 | `commit_progress` | Create git checkpoint |
 
-### Post-Completion Reviews (4 tools)
+### Post-Completion Reviews (5 tools)
 | Tool | Description |
 |------|-------------|
 | `run_review` | Manually trigger code/architecture reviews |
 | `check_reviews` | Monitor review worker status |
 | `get_review_results` | Get aggregated findings (summary/detailed/json) |
 | `configure_reviews` | Set auto-review preferences |
+| `implement_review_suggestions` | Convert review findings into features |
+
+### Repository Setup (3 tools)
+| Tool | Description |
+|------|-------------|
+| `setup_analyze` | Analyze repo freshness and missing configs |
+| `setup_init` | Initialize repo configuration with parallel workers |
+| `setup_status` | Check setup progress |
 
 ### Protocol Management (5 tools)
 | Tool | Description |
@@ -346,6 +427,7 @@ your-project/
 │   └── workers/
 │       ├── *.prompt            # Worker prompts
 │       ├── *.log               # Worker output logs
+│       ├── *.done              # Completion markers
 │       ├── *.status            # Worker status
 │       ├── *.plan.json         # Competitive plans
 │       ├── *.confidence        # Self-reported confidence
@@ -360,7 +442,7 @@ your-project/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DASHBOARD_PORT` | `3456` | Dashboard HTTP port |
-| `ENABLE_DASHBOARD` | `true` | Set `false` to disable |
+| `ENABLE_DASHBOARD` | `true` | Set to `false` to disable |
 
 ## Security
 
@@ -391,7 +473,7 @@ your-project/
 
 ## Contributing
 
-Contributions welcome! Open an issue or PR.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 

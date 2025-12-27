@@ -36,6 +36,9 @@ import {
   generateReleasePlease,
   generateReleasePleaseWorkflow,
   generateIssueTemplates,
+  generatePRTemplate,
+  generateContributing,
+  generateSecurity,
   SupportedLanguage,
   ProjectAnalysis,
 } from "./generator.js";
@@ -328,6 +331,46 @@ export class SetupManager {
       }
     }
 
+    // 6. PR Template (GitHub/GitLab/Gitea)
+    if (!skipConfigs.has("pr-template") && (this.platform === "github" || this.platform === "gitlab" || this.platform === "gitea")) {
+      const prTemplatePath = this.platform === "gitlab" ? ".gitlab/merge_request_templates/default.md" :
+                             this.platform === "gitea" ? ".gitea/PULL_REQUEST_TEMPLATE.md" :
+                             ".github/PULL_REQUEST_TEMPLATE.md";
+      features.push({
+        id: "setup-pr-template",
+        description: "Create a pull/merge request template for consistent PR descriptions",
+        targetPath: prTemplatePath,
+        configType: "markdown",
+        existingFile: this.fileExists(prTemplatePath),
+        priority: 55,
+        platform: this.platform,
+      });
+    }
+
+    // 7. CONTRIBUTING.md (platform-agnostic)
+    if (!skipConfigs.has("contributing")) {
+      features.push({
+        id: "setup-contributing",
+        description: "Create CONTRIBUTING.md with contribution guidelines",
+        targetPath: "CONTRIBUTING.md",
+        configType: "markdown",
+        existingFile: this.fileExists("CONTRIBUTING.md"),
+        priority: 60,
+      });
+    }
+
+    // 8. SECURITY.md (platform-agnostic)
+    if (!skipConfigs.has("security")) {
+      features.push({
+        id: "setup-security",
+        description: "Create SECURITY.md with security policy and vulnerability reporting",
+        targetPath: "SECURITY.md",
+        configType: "markdown",
+        existingFile: this.fileExists("SECURITY.md"),
+        priority: 65,
+      });
+    }
+
     // Mark features to skip based on config
     for (const feature of features) {
       feature.skip = skipConfigs.has(feature.id.replace("setup-", ""));
@@ -378,6 +421,15 @@ export class SetupManager {
       case "setup-bitbucket-templates":
       case "setup-azure-templates":
         return this.buildIssueTemplatesPrompt(analysis);
+
+      case "setup-pr-template":
+        return this.buildPRTemplatePrompt(analysis, projectAnalysis);
+
+      case "setup-contributing":
+        return this.buildContributingPrompt(analysis, projectAnalysis);
+
+      case "setup-security":
+        return this.buildSecurityPrompt(analysis, projectAnalysis);
 
       default:
         throw new Error(`Unknown setup feature: ${featureId}`);
@@ -989,6 +1041,123 @@ ${templatesContent}
 ${platform === "github" ? "- The config.yml controls the template chooser behavior" : ""}
 ${platform === "gitlab" ? "- GitLab templates use simple markdown with optional /label quick actions" : ""}
 ${platform === "azure" ? "- Azure DevOps templates can include work item field mappings" : ""}
+`;
+  }
+
+  /**
+   * Build prompt for PR template setup
+   */
+  private buildPRTemplatePrompt(analysis: SetupAnalysis, projectAnalysis: ProjectAnalysis): string {
+    const platform = this.platform;
+    const platformConfig = this.platformConfig || getPlatformConfig(platform);
+    const platformName = platformConfig.name;
+
+    const generatedContent = generatePRTemplate();
+    const targetPath = platform === "gitlab" ? ".gitlab/merge_request_templates/default.md" :
+                       platform === "gitea" ? ".gitea/PULL_REQUEST_TEMPLATE.md" :
+                       ".github/PULL_REQUEST_TEMPLATE.md";
+
+    return `You are setting up a Pull Request template for this ${platformName} repository.
+
+## Task
+Create a PR/MR template at ${targetPath}.
+
+## Project Analysis
+- Language: ${analysis.projectInfo.type}
+- Has Tests: ${analysis.ciNeeds.test}
+- Has Linting: ${analysis.ciNeeds.lint}
+
+## Generated Template
+Here is a generated PR template:
+
+\`\`\`markdown
+${generatedContent}
+\`\`\`
+
+## Instructions
+1. Create the parent directory if it doesn't exist
+2. Review and customize the template for your project
+3. Adjust checklist items based on your workflow
+4. Add any project-specific sections needed
+
+## Important
+- Keep the template focused and not too long
+- Include relevant checkboxes for your review process
+- The template will be shown when creating new PRs/MRs
+`;
+  }
+
+  /**
+   * Build prompt for CONTRIBUTING.md setup
+   */
+  private buildContributingPrompt(analysis: SetupAnalysis, projectAnalysis: ProjectAnalysis): string {
+    const generatedContent = generateContributing(projectAnalysis);
+
+    return `You are setting up CONTRIBUTING.md for this repository.
+
+## Task
+Create or update the CONTRIBUTING.md file with contribution guidelines.
+
+## Project Analysis
+- Project Name: ${projectAnalysis.name}
+- Language: ${analysis.projectInfo.type}
+- Package Manager: ${analysis.projectInfo.packageManager || "unknown"}
+- Has Tests: ${analysis.ciNeeds.test}
+- Has Linting: ${analysis.ciNeeds.lint}
+
+## Generated Template
+Here is a generated CONTRIBUTING.md template:
+
+\`\`\`markdown
+${generatedContent}
+\`\`\`
+
+## Instructions
+1. Review the generated template
+2. Customize the development setup section for your project
+3. Add any project-specific contribution guidelines
+4. Update placeholder URLs and values
+5. Write the final CONTRIBUTING.md file
+
+## Important
+- Make the contribution process as clear as possible
+- Include actual commands that work for this project
+- Be welcoming to new contributors
+`;
+  }
+
+  /**
+   * Build prompt for SECURITY.md setup
+   */
+  private buildSecurityPrompt(analysis: SetupAnalysis, projectAnalysis: ProjectAnalysis): string {
+    const generatedContent = generateSecurity(projectAnalysis);
+
+    return `You are setting up SECURITY.md for this repository.
+
+## Task
+Create the SECURITY.md file with security policy and vulnerability reporting guidelines.
+
+## Project Name
+${projectAnalysis.name}
+
+## Generated Template
+Here is a generated SECURITY.md template:
+
+\`\`\`markdown
+${generatedContent}
+\`\`\`
+
+## Instructions
+1. Review the generated template
+2. Update the security contact email with a real email address
+3. Adjust the supported versions table for your project
+4. Customize the vulnerability reporting process if needed
+5. Write the final SECURITY.md file
+
+## Important
+- Provide a clear, private way to report vulnerabilities
+- Set realistic response time expectations
+- Never ask reporters to publicly disclose before a fix is ready
 `;
   }
 

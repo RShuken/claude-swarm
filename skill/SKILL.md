@@ -169,7 +169,7 @@ Workers can propose new protocols validated against immutable base constraints:
 Use `check_worker` with `heartbeat: true` for lightweight status checks:
 ```
 check_worker(featureId, heartbeat: true)
-→ Returns: status, lastToolUsed, lastFile, lastActivity, runningFor
+-> Returns: status, lastToolUsed, lastFile, lastActivity, runningFor
 ```
 
 ### Competitive Planning for Complex Features
@@ -201,16 +201,31 @@ Confidence levels:
 After all workers complete, automated reviews run automatically:
 
 ```
-1. All workers complete → session transitions to "reviewing" status
+1. All workers complete -> session transitions to "reviewing" status
 2. Code review worker analyzes: bugs, security, style, test coverage
 3. Architecture review worker analyzes: coupling, patterns, scalability
 4. Findings aggregated into progress log
 5. Use get_review_results for detailed findings
+6. Use implement_review_suggestions to convert findings into new features
 ```
 
 Review configuration:
 - `configure_reviews(enabled: false)` - Disable automatic reviews
 - `run_review(reviewTypes: ["code"])` - Manually run specific reviews
+
+### Acting on Review Findings
+Convert review issues into actionable features:
+
+```
+# View available issues from reviews
+implement_review_suggestions(projectDir)
+
+# Create features from specific issues by index
+implement_review_suggestions(projectDir, issueIndices: [0, 2, 5])
+
+# Auto-select warnings and errors
+implement_review_suggestions(projectDir, autoSelect: true, minSeverity: "warning")
+```
 
 ### Error Recovery
 - Auto-retry is enabled by default (3 attempts) via `mark_complete`
@@ -233,7 +248,8 @@ A real-time web dashboard is available at `http://localhost:3456`:
 - Live updates via Server-Sent Events
 - Session overview with progress bar
 - Feature cards with status and dependencies
-- Worker terminal output streaming
+- Worker terminal output streaming with ANSI color support
+- Review worker progress visibility
 - Dark mode support
 
 ## Tools Reference
@@ -293,6 +309,7 @@ A real-time web dashboard is available at `http://localhost:3456`:
 | `check_reviews` | Monitor review worker progress |
 | `get_review_results` | Get aggregated findings |
 | `configure_reviews` | Configure automatic reviews |
+| `implement_review_suggestions` | Convert findings into features |
 
 ### Protocol Management
 | Tool | Purpose |
@@ -363,6 +380,7 @@ Moving to feature-2...
 [Continue until all features complete]
 [Automatic code and architecture reviews run]
 [get_review_results to see findings]
+[implement_review_suggestions to create follow-up features if needed]
 ```
 
 ## Repo Setup
@@ -391,11 +409,13 @@ Me: I'll configure this repo with appropriate settings. Let me initialize the se
 3. Configure Dependabot for npm dependencies
 4. Add Release Please for automated releases
 5. Create issue templates (bug report, feature request)
-6. Add pull request template]
+6. Add pull request template
+7. Create CONTRIBUTING.md with guidelines
+8. Add SECURITY.md with vulnerability policy]
 
-Session initialized with 6 features.
+Session initialized with 8 features.
 
-[start_parallel_workers for features 1-6]  # All independent, run in parallel
+[start_parallel_workers for features 1-8]  # All independent, run in parallel
 Workers started for all configuration features...
 
 [Run: sleep 120]  # Wait 2 minutes
@@ -419,6 +439,8 @@ Build and tests pass with new configuration!
 | **Dependabot** | Automated dependency updates | `.github/dependabot.yml` |
 | **Issue Templates** | Structured bug/feature reporting | `.github/ISSUE_TEMPLATE/*.yml` |
 | **PR Template** | Consistent pull request descriptions | `.github/PULL_REQUEST_TEMPLATE.md` |
+| **CONTRIBUTING.md** | Contribution guidelines | `CONTRIBUTING.md` |
+| **SECURITY.md** | Security policy and vulnerability reporting | `SECURITY.md` |
 
 ### Customization Options
 
@@ -427,13 +449,13 @@ Control which configurations are applied using these options in your task descri
 **Skip specific configs** - Use `skipConfigs` to exclude certain configuration types:
 ```
 "Set up CI and issue templates, but skip Release Please and Dependabot"
-→ skipConfigs: ["release-please", "dependabot"]
+-> skipConfigs: ["release-please", "dependabot"]
 ```
 
 **Force overwrite** - Use `force: true` to replace existing configurations:
 ```
 "Update all CI workflows to latest patterns, replacing existing ones"
-→ force: true (overwrites existing .github/workflows/)
+-> force: true (overwrites existing .github/workflows/)
 ```
 
 **Merge mode (default)** - Without `force`, existing configs are preserved and merged:
