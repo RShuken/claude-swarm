@@ -1186,12 +1186,17 @@ The worker may not be running or the connection was lost.</pre>`;
 
             // First escape HTML to prevent XSS
             let result = escapeHtml(text);
+            let openSpans = 0;
 
             // Then process ANSI codes
             // Match ANSI escape sequences: ESC[...m
             result = result.replace(/\x1b\[([0-9;]*)m/g, (match, codes) => {
                 if (!codes || codes === '0') {
-                    return '</span>';
+                    if (openSpans > 0) {
+                        openSpans--;
+                        return '</span>';
+                    }
+                    return '';
                 }
 
                 const codeArray = codes.split(';');
@@ -1210,10 +1215,20 @@ The worker may not be running or the connection was lost.</pre>`;
                 }
 
                 if (styles.length > 0) {
-                    return `<span style="${styles.join('; ')}">`;
+                    let replacement = '';
+                    if (openSpans > 0) {
+                        replacement += '</span>';
+                        openSpans--;
+                    }
+                    replacement += `<span style="${styles.join('; ')}">`;
+                    openSpans++;
+                    return replacement;
                 }
                 return '';
             });
+
+            // Close any remaining open spans
+            result += '</span>'.repeat(openSpans);
 
             return result;
         }

@@ -5331,9 +5331,17 @@ server.tool(
       };
     }
 
-    // Severity ordering for filtering
-    const severityOrder = { info: 0, warning: 1, error: 2 };
-    const minSeverityLevel = severityOrder[minSeverity];
+    // Severity ordering for filtering (includes all review severity levels)
+    const severityOrder: Record<string, number> = {
+      info: 0,
+      minor: 1,
+      warning: 1,
+      moderate: 2,
+      error: 2,
+      major: 3,
+      critical: 4
+    };
+    const minSeverityLevel = severityOrder[minSeverity] ?? 0;
 
     // Filter by severity
     const eligibleIssues = allIssues.filter(
@@ -5341,7 +5349,7 @@ server.tool(
     );
 
     // If no indices provided and not auto-selecting, show available issues
-    if (!issueIndices && !autoSelect) {
+    if ((!issueIndices || issueIndices.length === 0) && !autoSelect) {
       let response = `## Review Issues Available for Implementation\n\n`;
       response += `Found ${allIssues.length} total issues, ${eligibleIssues.length} at ${minSeverity} or higher.\n\n`;
 
