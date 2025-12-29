@@ -52,8 +52,11 @@ npm run build
 # Add to Claude Code
 claude mcp add claude-swarm --scope user -- node $(pwd)/dist/index.js
 
-# Install the skill (optional but recommended)
+# Install the swarm skill (optional but recommended)
 mkdir -p ~/.claude/skills/swarm && cp skill/SKILL.md ~/.claude/skills/swarm/
+
+# Install the braingrid-swarm skill (for Braingrid PRD integration)
+mkdir -p ~/.claude/skills/braingrid-swarm && cp skill/braingrid-swarm/SKILL.md ~/.claude/skills/braingrid-swarm/
 ```
 
 ### Basic Usage
@@ -73,6 +76,28 @@ Or manually orchestrate:
 4. mark_complete - Mark features done (auto-retry on failure)
 5. commit_progress - Git checkpoint
 ```
+
+### Braingrid Integration
+
+For teams using [Braingrid](https://braingrid.ai) for PRD management, the `/braingrid-swarm` skill enables workers to follow exact task specifications instead of doing their own planning:
+
+```
+Use /braingrid-swarm to execute REQ-14 from PROJ-3
+```
+
+**Requirements:**
+- Braingrid CLI (`npm install -g @braingrid/cli`)
+- Authenticated with Braingrid (`braingrid login`)
+- Project initialized (`braingrid init`)
+
+**Workflow:**
+1. Breaks down requirements into tasks via Braingrid AI
+2. Reviews implementation plan (runs breakdown again)
+3. Workers receive exact PRD specifications
+4. Updates task/requirement status in Braingrid as work completes
+5. Runs tests, commits, and creates PRs
+
+See `skill/braingrid-swarm/SKILL.md` for full documentation.
 
 ## Protocol System
 
