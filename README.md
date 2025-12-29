@@ -77,27 +77,359 @@ Or manually orchestrate:
 5. commit_progress - Git checkpoint
 ```
 
-### Braingrid Integration
+## Braingrid-Swarm Integration
 
-For teams using [Braingrid](https://braingrid.ai) for PRD management, the `/braingrid-swarm` skill enables workers to follow exact task specifications instead of doing their own planning:
+The `/braingrid-swarm` skill combines claude-swarm with [Braingrid](https://braingrid.ai) PRD management. Instead of workers planning their own approach, they receive exact task specifications from Braingrid and follow them precisely.
+
+### Why Use Braingrid-Swarm?
+
+| Standard /swarm | /braingrid-swarm |
+|-----------------|------------------|
+| Workers plan their own approach | Workers follow exact PRD specs |
+| Competitive planning for complex features | Tasks pre-defined by Braingrid AI |
+| Ad-hoc feature descriptions | Structured: Goal, Steps, Success Criteria |
+| Manual progress tracking | Auto-sync status with Braingrid |
+
+### Complete Installation Guide
+
+#### Prerequisites
+
+Before installing, ensure you have:
+
+- **Node.js 18+** - Check with `node --version`
+- **tmux** - Terminal multiplexer for worker sessions
+- **Claude Code CLI** - The Claude Code application
+- **Git** - For cloning the repository
+
+#### Step 1: Install System Dependencies
+
+```bash
+# macOS
+brew install tmux
+
+# Ubuntu/Debian
+sudo apt-get install tmux
+
+# Windows (use WSL)
+wsl --install
+# Then inside WSL: sudo apt-get install tmux
+```
+
+#### Step 2: Clone and Build Claude-Swarm
+
+```bash
+# Clone the repository
+git clone https://github.com/RShuken/claude-swarm.git
+cd claude-swarm
+
+# Install dependencies
+npm install
+
+# Build the TypeScript project
+npm run build
+```
+
+#### Step 3: Add MCP Server to Claude Code
+
+```bash
+# Add the MCP server (run from the claude-swarm directory)
+claude mcp add claude-swarm --scope user -- node $(pwd)/dist/index.js
+
+# Verify it's connected
+claude mcp list
+# Should show: claude-swarm: ... ✓ Connected
+```
+
+#### Step 4: Install the Skills
+
+```bash
+# Install the standard swarm skill
+mkdir -p ~/.claude/skills/swarm
+cp skill/SKILL.md ~/.claude/skills/swarm/
+
+# Install the braingrid-swarm skill
+mkdir -p ~/.claude/skills/braingrid-swarm
+cp skill/braingrid-swarm/SKILL.md ~/.claude/skills/braingrid-swarm/
+```
+
+#### Step 5: Install and Configure Braingrid CLI
+
+```bash
+# Install Braingrid CLI globally
+npm install -g @braingrid/cli
+
+# Authenticate with Braingrid (opens browser for OAuth)
+braingrid login
+
+# Verify authentication
+braingrid whoami
+
+# Initialize Braingrid in your project directory (one-time per project)
+cd /path/to/your/project
+braingrid init
+```
+
+#### Step 6: Verify Installation
+
+```bash
+# Check all components
+claude mcp list                    # Should show claude-swarm connected
+ls ~/.claude/skills/               # Should show swarm/ and braingrid-swarm/
+braingrid status                   # Should show authenticated
+tmux -V                            # Should show tmux version
+```
+
+### Quick Start Usage
+
+After installation, start a **new Claude Code session** and use:
 
 ```
+# Execute a specific requirement
 Use /braingrid-swarm to execute REQ-14 from PROJ-3
+
+# Execute all planned requirements
+Use /braingrid-swarm to execute all PLANNED requirements from PROJ-3
+
+# Execute with specific test commands
+Use /braingrid-swarm to execute REQ-14 from PROJ-3, run "npm run test:coverage" after each task
 ```
 
-**Requirements:**
-- Braingrid CLI (`npm install -g @braingrid/cli`)
-- Authenticated with Braingrid (`braingrid login`)
-- Project initialized (`braingrid init`)
+### How It Works
 
-**Workflow:**
-1. Breaks down requirements into tasks via Braingrid AI
-2. Reviews implementation plan (runs breakdown again)
-3. Workers receive exact PRD specifications
-4. Updates task/requirement status in Braingrid as work completes
-5. Runs tests, commits, and creates PRs
+#### The Braingrid-Swarm Workflow
 
-See `skill/braingrid-swarm/SKILL.md` for full documentation.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     BRAINGRID-SWARM WORKFLOW                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. BREAKDOWN REQUIREMENT                                        │
+│     braingrid requirement breakdown REQ-XX                       │
+│     └── Wait 60s, check for tasks, repeat if needed             │
+│                                                                  │
+│  2. REVIEW IMPLEMENTATION PLAN                                   │
+│     braingrid requirement breakdown REQ-XX (again)               │
+│     └── AI reviews and may update tasks                         │
+│                                                                  │
+│  3. UPDATE STATUS                                                │
+│     braingrid requirement update REQ-XX --status IN_PROGRESS     │
+│                                                                  │
+│  4. FOR EACH TASK (sequential, respecting dependencies):         │
+│     ├── braingrid task update TASK-XX --status IN_PROGRESS      │
+│     ├── Start swarm worker with full task content               │
+│     ├── Worker follows exact specs (Goal, Steps, Criteria)      │
+│     ├── Run tests (npm run test)                                │
+│     ├── braingrid task update TASK-XX --status COMPLETED        │
+│     └── Commit progress                                          │
+│                                                                  │
+│  5. COMPLETE REQUIREMENT                                         │
+│     ├── Run full test suite                                     │
+│     ├── Create pull request                                     │
+│     └── braingrid requirement update REQ-XX --status COMPLETED  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Worker Prompt Structure
+
+Each swarm worker receives the complete Braingrid task specification:
+
+```
+BRAINGRID TASK: TASK-XX - [Task Title]
+
+## Goal
+[Exact goal from Braingrid]
+
+## Implementation Context
+Files to Create/Modify:
+- file1.ts
+- file2.ts
+
+## Implementation Steps
+1. [Step 1 from Braingrid]
+2. [Step 2 from Braingrid]
+...
+
+## Success Criteria
+- [Criterion 1]
+- [Criterion 2]
+
+## Scope Constraint
+Implement ONLY the deliverables listed above. Follow the implementation steps exactly.
+```
+
+### Braingrid CLI Reference
+
+Common commands used during braingrid-swarm workflow:
+
+```bash
+# List projects
+braingrid project list
+
+# List requirements for a project
+braingrid requirement list --project PROJ-3
+
+# Show requirement details
+braingrid requirement show REQ-14 -p PROJ-3
+
+# Break down requirement into tasks (AI-powered)
+braingrid requirement breakdown REQ-14 -p PROJ-3
+
+# Get full implementation plan
+braingrid requirement build REQ-14 -p PROJ-3
+
+# List tasks for a requirement
+braingrid task list -r REQ-14 -p PROJ-3
+
+# Show task details
+braingrid task show TASK-1 -p PROJ-3
+
+# Update requirement status
+braingrid requirement update REQ-14 -p PROJ-3 --status IN_PROGRESS
+# Status options: IDEA, PLANNED, IN_PROGRESS, REVIEW, COMPLETED, CANCELLED
+
+# Update task status
+braingrid task update TASK-1 -r REQ-14 -p PROJ-3 --status COMPLETED
+# Status options: PLANNED, IN_PROGRESS, COMPLETED, CANCELLED
+```
+
+### Configuration Options
+
+#### Test Commands
+
+Configure which tests run after each task:
+
+```
+Use /braingrid-swarm with test command "npm run test:coverage"
+```
+
+Common test configurations:
+- `npm run test` - Standard test suite
+- `npm run test:coverage` - Tests with coverage report
+- `npm run test && npm run build` - Tests and build verification
+- `pytest` - Python projects
+- `cargo test` - Rust projects
+
+#### Parallel vs Sequential Execution
+
+By default, tasks run **sequentially** respecting Braingrid dependencies. This is safer for most projects.
+
+### Troubleshooting
+
+#### "claude-swarm not connected"
+
+```bash
+# Re-add the MCP server
+cd /path/to/claude-swarm
+claude mcp remove claude-swarm
+claude mcp add claude-swarm --scope user -- node $(pwd)/dist/index.js
+
+# Verify
+claude mcp list
+```
+
+#### "braingrid: command not found"
+
+```bash
+# Install globally
+npm install -g @braingrid/cli
+
+# Or check your PATH
+which braingrid
+```
+
+#### "No project specified" in Braingrid
+
+```bash
+# Initialize Braingrid in your project
+cd /path/to/your/project
+braingrid init
+
+# Or specify project explicitly
+braingrid requirement list -p PROJ-3
+```
+
+#### Task breakdown takes too long
+
+Braingrid AI can take 1-3 minutes for complex requirements. The workflow automatically:
+1. Waits 60 seconds after initiating breakdown
+2. Checks if tasks exist
+3. Waits additional 30-second intervals if needed
+
+#### Worker doesn't follow task specs
+
+Ensure the full task content is included in the feature description. Use `send_worker_message` to remind the worker:
+
+```
+Follow the Braingrid task specification exactly. Do not deviate from the Implementation Steps.
+```
+
+#### Tests fail after task completion
+
+- Don't mark task COMPLETED in Braingrid until tests pass
+- Use `retry_feature` in swarm to restart the worker
+- Check worker output for error details
+
+### Example Session
+
+```
+User: Use /braingrid-swarm to execute REQ-14 from PROJ-3
+
+Claude: I'll execute REQ-14 (Speech Recognition Benchmarking) from PROJ-3.
+
+Step 1: Breaking down requirement into tasks...
+$ braingrid requirement breakdown REQ-14 -p PROJ-3
+[Waiting 60 seconds for task generation...]
+
+Step 2: Tasks created. Reviewing implementation plan...
+$ braingrid requirement breakdown REQ-14 -p PROJ-3
+[AI reviewing and optimizing tasks...]
+
+Step 3: Found 13 tasks. Updating requirement status...
+$ braingrid requirement update REQ-14 -p PROJ-3 --status IN_PROGRESS
+
+Step 4: Starting TASK-1 (Create Project Structure)...
+$ braingrid task update TASK-1 -r REQ-14 -p PROJ-3 --status IN_PROGRESS
+[Starting swarm worker with full task specification...]
+[Worker implementing: package.json, tsconfig.json, src/index.ts...]
+[Running tests: npm run test]
+$ braingrid task update TASK-1 -r REQ-14 -p PROJ-3 --status COMPLETED
+
+Step 5: Starting TASK-2 (Define Provider Interface)...
+[Continues for all 13 tasks...]
+
+Step 13: All tasks complete. Running final verification...
+$ npm run test:coverage
+All tests passing.
+
+Creating pull request...
+$ gh pr create --title "feat(REQ-14): Speech Recognition Benchmarking"
+
+Updating requirement status...
+$ braingrid requirement update REQ-14 -p PROJ-3 --status COMPLETED
+
+✅ REQ-14 complete! PR created: https://github.com/...
+```
+
+### Files Structure
+
+```
+~/.claude/
+└── skills/
+    ├── swarm/
+    │   └── SKILL.md              # Standard swarm orchestration
+    └── braingrid-swarm/
+        └── SKILL.md              # Braingrid-driven orchestration
+
+/path/to/claude-swarm/
+├── skill/
+│   ├── SKILL.md                  # Standard swarm skill source
+│   └── braingrid-swarm/
+│       └── SKILL.md              # Braingrid-swarm skill source
+├── src/                          # MCP server source code
+├── dist/                         # Compiled MCP server
+└── README.md                     # This file
+```
 
 ## Protocol System
 
